@@ -1,0 +1,45 @@
+{
+  "name": "open-musicflow",
+  "version": "1.0.0",
+  "description": "Open-source cleanroom implementation of LG Music Flow PC Software for Linux, Windows, and macOS",
+  "main": "dist-electron/electron/main.js",
+  "author": "Open MusicFlow Contributors",
+  "license": "MIT",
+  "scripts": {
+    "dev:server": "tsx src/backend/standaloneServer.ts",
+    "dev:vite": "vite --port 5173 --host 0.0.0.0",
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:vite\"",
+    "build:frontend": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json && ./node_modules/.bin/esbuild src/backend/standaloneServer.ts --bundle --platform=node --target=node18 --format=cjs --external:bufferutil --external:utf-8-validate --outfile=dist-electron/backend/standaloneServer.js && ./node_modules/.bin/esbuild src/electron/main.ts --bundle --platform=node --target=node18 --format=cjs --external:electron --external:bufferutil --external:utf-8-validate --outfile=dist-electron/electron/main.js",
+    "build": "npm run build:frontend && npm run build:electron",
+    "electron:start": "npm run build && electron .",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb tar.gz",
+    "dist:win": "npm run build && electron-builder --win nsis zip",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip",
+    "dist:all": "npm run build && electron-builder -mwl",
+    "test": "node --import tsx --test test/protocol.test.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
