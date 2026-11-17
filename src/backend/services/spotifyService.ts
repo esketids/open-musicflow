@@ -99,6 +99,9 @@ export class SpotifyService {
   }
 
   public getState(): SpotifyLinkState {
+    if (this.soundbarClient.state.connected) {
+      this.state.isPlaying = this.soundbarClient.state.playInfo.playing;
+    }
     // Keep soundbar volume synced with the active soundbar Spotify Connect endpoint
     const sbVolPercent = Math.round(
       (this.soundbarClient.state.volume / (this.soundbarClient.state.maxVolume || 40)) * 100
@@ -380,12 +383,30 @@ export class SpotifyService {
     return this.getState();
   }
 
-  public togglePlayPause(): SpotifyLinkState {
-    this.state.isPlaying = !this.state.isPlaying;
-    this.soundbarClient.sendRawPacket({
-      msg: 'PLAY_CMD',
-      data: { playing: this.state.isPlaying ? 1 : 0 },
-    });
+  public async togglePlayPause(): Promise<SpotifyLinkState> {
+    const currentlyPlaying = this.soundbarClient.state.connected
+      ? this.soundbarClient.state.playInfo.playing
+      : this.state.isPlaying;
+    const targetPlaying = !currentlyPlaying;
+    this.state.isPlaying = targetPlaying;
+
+    this.soundbarClient.sendPlayCommand(targetPlaying ? 0 : 1);
+
+    if (this.accessToken) {
+      try {
+        const endpoint = targetPlaying ? 'play' : 'pause';
+        const deviceQuery = this.state.activeDeviceId
+          ? `?device_id=${encodeURIComponent(this.state.activeDeviceId)}`
+          : '';
+        await this.fetchWithAuth(
+          `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
+          { method: 'PUT' }
+        );
+      } catch {
+        // Handled via TCP 9741 PLAY_CMD
+      }
+    }
+
     return this.getState();
   }
 }

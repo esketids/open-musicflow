@@ -122,6 +122,16 @@ test('LgSoundbarClient communicates over TCP 9741 with LG SJ8 MockSoundbarServer
     client.deleteWifiAlarm(created.id);
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(client.state.alarms.some((a) => a.id === created.id), false);
+
+    // Test PLAY_CMD pause (playctrl: 1) and resume (playctrl: 0)
+    assert.equal(client.state.playInfo.playing, true);
+    client.sendPlayCommand(1);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(client.state.playInfo.playing, false);
+
+    client.sendPlayCommand(0);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(client.state.playInfo.playing, true);
   } finally {
     client.disconnect();
     await sim.stop();

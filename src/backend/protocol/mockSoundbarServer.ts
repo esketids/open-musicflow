@@ -74,7 +74,7 @@ export class MockSoundbarServer {
     visibleTvConn: true,
     sleepTime: 0,
     playTimeNotify: true,
-    playing: 1,
+    playing: 0,
     title: 'Bandit',
     artist: 'EsDeeKid',
     album: 'Bandit',
@@ -651,7 +651,7 @@ export class MockSoundbarServer {
         if (typeof item.albumtitle === 'string') this.state.album = item.albumtitle;
         else if (typeof item.album === 'string') this.state.album = item.album;
         if (typeof data.playing === 'number') this.state.playing = data.playing;
-        else if (msg === 'LOCAL_PLAY_URL') this.state.playing = 1;
+        else if (msg === 'LOCAL_PLAY_URL') this.state.playing = 0;
         this.sendResponse(
           socket,
           {
@@ -679,6 +679,26 @@ export class MockSoundbarServer {
               canPlay: 0,
               c4aappname: this.state.sourceApp,
             },
+          },
+          cipherProfile
+        );
+        break;
+      }
+
+      case 'PLAY_CMD': {
+        const ctrl = typeof data.playctrl === 'number' ? data.playctrl : 0;
+        if (ctrl === 0 || ctrl === 1 || ctrl === 2) {
+          this.state.playing = ctrl;
+        }
+        if (typeof data.repeat === 'number') this.state.repeat = data.repeat;
+        if (typeof data.shuffle === 'boolean') this.state.shuffle = data.shuffle;
+        else if (typeof data.suffle === 'boolean') this.state.shuffle = data.suffle;
+        this.sendResponse(
+          socket,
+          {
+            msg: 'PLAY_CMD',
+            result: 'OK',
+            data: { playctrl: ctrl },
           },
           cipherProfile
         );

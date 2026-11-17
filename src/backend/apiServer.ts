@@ -442,10 +442,11 @@ ${ok ? '<script>setTimeout(() => { window.close(); }, 1500);</script>' : ''}
     res.json({ ok: true, spotify: state, soundbar: soundbarClient.state });
   });
 
-  app.post('/api/spotify/toggle', (_req, res) => {
-    const state = spotifyService.togglePlayPause();
+  app.post('/api/spotify/toggle', async (_req, res) => {
+    const state = await spotifyService.togglePlayPause();
     broadcast('spotify', state);
-    res.json({ ok: true, spotify: state });
+    broadcast('state', soundbarClient.state);
+    res.json({ ok: true, spotify: state, soundbar: soundbarClient.state });
   });
 
   // === Local Media Library & HTTP/DLNA Audio Streaming (:4741 and :49252) ===

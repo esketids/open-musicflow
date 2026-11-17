@@ -479,6 +479,24 @@ export class LgSoundbarClient extends EventEmitter {
     }
   }
 
+  /** Sends LG Music Flow PLAY_CMD (`playctrl`: 0=PLAY, 1=PAUSE, 2=STOP, 3=PREV, 5=NEXT). */
+  public sendPlayCommand(playctrl: 0 | 1 | 2 | 3 | 5): void {
+    if (playctrl === 0) this.state.playInfo.playing = true;
+    else if (playctrl === 1 || playctrl === 2) this.state.playInfo.playing = false;
+
+    const shuffle = Boolean(this.state.playInfo.shuffle);
+    this.sendRawPacket({
+      msg: 'PLAY_CMD',
+      data: {
+        playctrl,
+        repeat: this.state.playInfo.repeat ?? 0,
+        shuffle,
+        suffle: shuffle,
+      },
+    });
+    this.emitState();
+  }
+
   public setEqualizer(eqId: number): void {
     this.state.currentEq = eqId;
     this.emitState();
@@ -1088,7 +1106,7 @@ export class LgSoundbarClient extends EventEmitter {
         if (typeof data.duration === 'number') this.state.playInfo.durationSec = data.duration;
         if (typeof data.position === 'number') this.state.playInfo.positionSec = data.position;
         if (typeof data.playing === 'number') {
-          this.state.playInfo.playing = data.playing === 1;
+          this.state.playInfo.playing = data.playing === 0;
         }
         if (typeof data.shuffle === 'boolean') this.state.playInfo.shuffle = data.shuffle;
         if (typeof data.repeat === 'number') this.state.playInfo.repeat = data.repeat;
@@ -1099,9 +1117,20 @@ export class LgSoundbarClient extends EventEmitter {
         break;
       }
 
+      case 'PLAY_CMD': {
+        if (typeof data.playctrl === 'number') {
+          if (data.playctrl === 0) this.state.playInfo.playing = true;
+          else if (data.playctrl === 1 || data.playctrl === 2) this.state.playInfo.playing = false;
+        }
+        break;
+      }
+
       case 'PLAY_TIME': {
         if (typeof data.position === 'number') this.state.playInfo.positionSec = data.position;
         if (typeof data.duration === 'number') this.state.playInfo.durationSec = data.duration;
+        if (typeof data.playing === 'number') {
+          this.state.playInfo.playing = data.playing === 0;
+        }
         break;
       }
 

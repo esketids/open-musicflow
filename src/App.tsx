@@ -2274,11 +2274,20 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                 onClick={async () => {
                   const res = await fetch('/api/spotify/toggle', { method: 'POST' });
                   const data = await res.json();
-                  if (data.ok) setSpotify(data.spotify);
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
                 }}
               >
-                {spotify?.isPlaying ? <Pause size={14} /> : <Play size={14} />}
-                {spotify?.isPlaying ? 'Pause Stream' : 'Resume Stream'}
+                {(soundbar.connected ? soundbar.playInfo.playing : spotify?.isPlaying) ? (
+                  <Pause size={14} />
+                ) : (
+                  <Play size={14} />
+                )}
+                {(soundbar.connected ? soundbar.playInfo.playing : spotify?.isPlaying)
+                  ? 'Pause Stream'
+                  : 'Resume Stream'}
               </button>
             </div>
           </div>
