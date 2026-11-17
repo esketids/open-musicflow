@@ -487,13 +487,16 @@ export default function App() {
   const activeInputDef =
     LG_INPUT_FUNCTIONS.find((f) => f.id === soundbar.currentFunction) || LG_INPUT_FUNCTIONS[0];
 
+  const availFuncs = soundbar.availableFunctions || [0, 15, 1, 12, 6, 5, 8, 14];
+  const availEqs = soundbar.availableEqs || [14, 0, 7, 12];
+
   const displayedFunctions = showAllInputs
     ? LG_INPUT_FUNCTIONS
-    : LG_INPUT_FUNCTIONS.filter((f) => soundbar.availableFunctions.includes(f.id));
+    : LG_INPUT_FUNCTIONS.filter((f) => availFuncs.includes(f.id));
 
   const displayedEqs = showAllEqs
     ? LG_EQ_PRESETS
-    : LG_EQ_PRESETS.filter((e) => soundbar.availableEqs.includes(e.id));
+    : LG_EQ_PRESETS.filter((e) => availEqs.includes(e.id));
 
   const previewBitmask = alarmDays.reduce((acc, d) => acc | (1 << (6 - d)), 0);
 

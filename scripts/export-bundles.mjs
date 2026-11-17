@@ -125,11 +125,23 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-# Check if already listening on 4741
-if ! nc -z 127.0.0.1 4741 >/dev/null 2>&1; then
-  nohup node "$APP_RES_DIR/dist-electron/backend/standaloneServer.js" >/tmp/open-musicflow.log 2>&1 &
-  sleep 1
+# Terminate any stale previous Open MusicFlow instance holding port 4741
+STALE_PIDS="$(lsof -ti :4741 2>/dev/null || true)"
+if [ -n "$STALE_PIDS" ]; then
+  kill -9 $STALE_PIDS 2>/dev/null || true
+  sleep 0.3
 fi
+
+mkdir -p "$HOME/Library/Logs/OpenMusicFlowStudio" 2>/dev/null || true
+nohup node "$APP_RES_DIR/dist-electron/backend/standaloneServer.js" >/tmp/open-musicflow-debug.log 2>&1 &
+
+# Wait up to 5 seconds for port 4741 to become ready
+for _ in {1..25}; do
+  if nc -z 127.0.0.1 4741 >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
 
 # Open in dedicated frameless app window if Chrome/Brave/Edge exists, else default browser
 if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
@@ -144,7 +156,7 @@ fi
 `;
   fs.writeFileSync(path.join(macosDir, 'OpenMusicFlowStudio'), macosAppExec, { mode: 0o755 });
 
-  // 1-Click Direct Launcher (.command)
+  // 1-Click Direct Launcher (.command) with live terminal debug logs
   const startCommand = `#!/usr/bin/env bash
 set -e
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/miniconda3/bin:$HOME/anaconda3/bin:$HOME/miniforge3/bin:$PATH"
@@ -161,22 +173,36 @@ cd "$DIR"
 # Remove macOS Gatekeeper quarantine attributes if present
 xattr -cr "$DIR" 2>/dev/null || true
 
-echo "========================================================"
-echo "  Open MusicFlow Studio — LG SJ8 Controller & DMS"
-echo "  Web UI & API : http://127.0.0.1:4741"
-echo "  DLNA / DMS   : http://0.0.0.0:49252/dmr.xml"
-echo "========================================================"
-
-if nc -z 127.0.0.1 4741 >/dev/null 2>&1; then
-  echo "Server is already running on port 4741! Opening browser..."
-  open "http://127.0.0.1:4741"
-  exit 0
+# Stop any stale previous instance holding port 4741 so the new server takes over cleanly
+STALE_PIDS="$(lsof -ti :4741 2>/dev/null || true)"
+if [ -n "$STALE_PIDS" ]; then
+  echo "Stopping previous server instance on port 4741 (PID: $STALE_PIDS)..."
+  kill -9 $STALE_PIDS 2>/dev/null || true
+  sleep 0.3
 fi
 
-(sleep 1 && open "http://127.0.0.1:4741" || true) &
+echo "=================================================================="
+echo "  Open MusicFlow Studio — LG SJ8 Controller & Live Debug Console"
+echo "  Web UI & API : http://127.0.0.1:4741"
+echo "  Debug Logs   : http://127.0.0.1:4741/api/debug-log"
+echo "  Log Files    : /tmp/open-musicflow-debug.log"
+echo "                 ~/Library/Logs/OpenMusicFlowStudio/debug.log"
+echo "  DLNA / DMS   : http://0.0.0.0:49252/dmr.xml"
+echo "=================================================================="
+
+(
+  for _ in {1..25}; do
+    if nc -z 127.0.0.1 4741 >/dev/null 2>&1; then
+      open "http://127.0.0.1:4741" || true
+      break
+    fi
+    sleep 0.2
+  done
+) &
 exec node "$DIR/dist-electron/backend/standaloneServer.js"
 `;
   fs.writeFileSync(path.join(stageDir, 'Start-Open-MusicFlow.command'), startCommand, { mode: 0o755 });
+  fs.writeFileSync(path.join(stageDir, 'Debug-Open-MusicFlow.command'), startCommand, { mode: 0o755 });
 
   // 1-Click Installer to /Applications (.command)
   const installCommand = `#!/usr/bin/env bash
@@ -190,6 +216,10 @@ if [ ! -w "$TARGET_DIR" ]; then
 fi
 
 echo "Installing '$APP_NAME' to $TARGET_DIR ..."
+STALE_PIDS="$(lsof -ti :4741 2>/dev/null || true)"
+if [ -n "$STALE_PIDS" ]; then
+  kill -9 $STALE_PIDS 2>/dev/null || true
+fi
 xattr -cr "$DIR/$APP_NAME" 2>/dev/null || true
 rm -rf "$TARGET_DIR/$APP_NAME"
 cp -R "$DIR/$APP_NAME" "$TARGET_DIR/$APP_NAME"

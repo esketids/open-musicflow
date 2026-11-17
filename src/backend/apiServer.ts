@@ -15,6 +15,7 @@ import { SpotifyService } from './services/spotifyService';
 import { MediaLibraryService } from './services/mediaLibraryService';
 import { LG_DEFAULT_TCP_PORT, LG_DMS_HTTP_PORT } from './protocol/lgWireCodec';
 import { EncryptionMode, ProtocolDialect } from '../shared/protocolTypes';
+import { initDebugLogger, logDebug, getRecentDebugLogs } from './debugLogger';
 
 export interface BackendServerInstance {
   httpServer: http.Server;
@@ -30,39 +31,59 @@ export async function createBackendServer(
   preferredPort = 4741,
   staticDistDir?: string
 ): Promise<BackendServerInstance> {
+  initDebugLogger('Node/Electron');
+
   const mockServer = new MockSoundbarServer(19741);
   const mockPort = await mockServer.start();
+  logDebug('SIMULATOR', `Virtual LG SJ8 TCP 9741 Simulator listening on 127.0.0.1:${mockPort}`);
 
   const soundbarClient = new LgSoundbarClient();
   const spotifyService = new SpotifyService(soundbarClient);
   const mediaService = new MediaLibraryService();
 
-  // Probe the user's live LG SJ8 at 192.168.0.10:9741 first on startup;
-  // if unreachable (e.g., offline or in a cloud VM), connect to the built-in LG SJ8 simulator.
+  // Connect immediately to the built-in LG SJ8 simulator so the UI has instant state,
+  // and probe the live LG SJ8 at 192.168.0.10:9741 in the background without blocking HTTP startup.
   try {
-    const liveSj8Reachable =
-      process.env.FORCE_SIMULATOR !== '1' &&
-      (await probeSoundbarPort('192.168.0.10', LG_DEFAULT_TCP_PORT, 800));
-    if (liveSj8Reachable) {
-      await soundbarClient.connect('192.168.0.10', LG_DEFAULT_TCP_PORT, {
-        dialect: 'auto',
-        encryption: 'sj8_v1',
-        isSimulator: false,
-      });
-    } else {
-      await soundbarClient.connect('127.0.0.1', mockPort, {
-        dialect: 'auto',
-        encryption: 'sj8_v1',
-        isSimulator: true,
-      });
-    }
+    await soundbarClient.connect('127.0.0.1', mockPort, {
+      dialect: 'auto',
+      encryption: 'sj8_v1',
+      isSimulator: true,
+    });
   } catch (err) {
-    console.warn('Initial connection warning:', err);
+    logDebug('WARN', `Initial simulator connection warning: ${(err as Error).message}`);
+  }
+
+  if (process.env.FORCE_SIMULATOR !== '1') {
+    void (async () => {
+      try {
+        logDebug('PROBE', `Probing live LG SJ8 at 192.168.0.10:${LG_DEFAULT_TCP_PORT}...`);
+        const liveSj8Reachable = await probeSoundbarPort('192.168.0.10', LG_DEFAULT_TCP_PORT, 600);
+        if (liveSj8Reachable) {
+          logDebug('PROBE', 'Live LG SJ8 detected at 192.168.0.10:9741! Switching connection...');
+          await soundbarClient.connect('192.168.0.10', LG_DEFAULT_TCP_PORT, {
+            dialect: 'auto',
+            encryption: 'sj8_v1',
+            isSimulator: false,
+          });
+        } else {
+          logDebug(
+            'PROBE',
+            '192.168.0.10:9741 not reachable on current network; staying on built-in LG SJ8 simulator.'
+          );
+        }
+      } catch (err) {
+        logDebug('PROBE', `Live SJ8 probe error: ${(err as Error).message}`);
+      }
+    })();
   }
 
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use((req, _res, next) => {
+    logDebug('HTTP', `${req.method} ${req.url}`);
+    next();
+  });
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -84,14 +105,20 @@ export async function createBackendServer(
   });
 
   soundbarClient.on('packet', (pkt) => {
+    logDebug(
+      'TCP-9741',
+      `${String(pkt.direction).toUpperCase()} ${pkt.msgType} (${pkt.rawByteLength}B, ${pkt.cipherProfile}) ${JSON.stringify(pkt.payload)}`
+    );
     broadcast('packet', pkt);
   });
 
   soundbarClient.on('alarmTriggered', (alarm) => {
+    logDebug('ALARM', `Triggered Wi-Fi Alarm: ${JSON.stringify(alarm)}`);
     broadcast('alarmTriggered', alarm);
   });
 
   wss.on('connection', (ws) => {
+    logDebug('WEBSOCKET', 'Client connected to /ws');
     ws.send(
       JSON.stringify({
         type: 'init',
@@ -108,6 +135,16 @@ export async function createBackendServer(
   });
 
   // === REST Endpoints ===
+
+  app.get('/api/debug-log', (_req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(getRecentDebugLogs());
+  });
+
+  app.post('/api/client-log', (req, res) => {
+    logDebug('UI-CLIENT-ERROR', JSON.stringify(req.body || {}));
+    res.json({ ok: true });
+  });
 
   app.get('/api/state', (_req, res) => {
     res.json({

@@ -1,12 +1,14 @@
 import { app, BrowserWindow, shell } from 'electron';
 import path from 'node:path';
 import { createBackendServer, BackendServerInstance } from '../backend/apiServer';
+import { logDebug } from '../backend/debugLogger';
 
 let mainWindow: BrowserWindow | null = null;
 let backendInstance: BackendServerInstance | null = null;
 
 async function createWindow() {
   const distPath = path.join(__dirname, '../../dist');
+  logDebug('ELECTRON', `Starting backend server with distPath=${distPath}`);
   backendInstance = await createBackendServer(4741, distPath);
 
   mainWindow = new BrowserWindow({
@@ -23,7 +25,16 @@ async function createWindow() {
     },
   });
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    logDebug('RENDERER-CONSOLE', `[L${level}] ${message} (${sourceId}:${line})`);
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    logDebug('RENDERER-ERROR', `did-fail-load (${errorCode}): ${errorDescription} at ${validatedURL}`);
+  });
+
   await mainWindow.loadURL(`http://127.0.0.1:${backendInstance.apiPort}`);
+  logDebug('ELECTRON', `Loaded UI at http://127.0.0.1:${backendInstance.apiPort}`);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
