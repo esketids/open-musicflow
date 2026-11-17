@@ -4,8 +4,12 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 const rootDir = path.resolve(import.meta.dirname, '..');
+const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+const appVersion = String(pkg.version || '1.0.1');
 const releaseDir = path.join(rootDir, 'release');
+const releasesDir = path.join(rootDir, 'releases');
 fs.mkdirSync(releaseDir, { recursive: true });
+fs.mkdirSync(releasesDir, { recursive: true });
 
 const APP_SVG_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <defs>
@@ -57,11 +61,25 @@ function copyCoreRuntime(stageDir) {
   fs.writeFileSync(path.join(stageDir, 'icon.svg'), APP_SVG_ICON);
 }
 
+function archiveBundle(folderName) {
+  const tarName = `${folderName}.tar.gz`;
+  const zipName = `${folderName}.zip`;
+  const tarPath = path.join(releaseDir, tarName);
+  const zipPath = path.join(releaseDir, zipName);
+  execSync(`tar -czf "${tarPath}" -C "${releaseDir}" "${folderName}"`);
+  execSync(
+    `python3 -c 'import shutil; shutil.make_archive("${path.join(releaseDir, folderName)}", "zip", "${releaseDir}", "${folderName}")'`
+  );
+  fs.copyFileSync(tarPath, path.join(releasesDir, tarName));
+  fs.copyFileSync(zipPath, path.join(releasesDir, zipName));
+  return { tarPath, zipPath };
+}
+
 // ============================================================================
 // 1. macOS Universal Bundle (.app + 1-Click Installer + .command Launcher)
 // ============================================================================
 function buildMacosBundle() {
-  const folderName = 'open-musicflow-v1.0.0-macos-universal';
+  const folderName = `open-musicflow-v${appVersion}-macos-universal`;
   const stageDir = path.join(releaseDir, folderName);
   fs.rmSync(stageDir, { recursive: true, force: true });
   fs.mkdirSync(stageDir, { recursive: true });
@@ -96,9 +114,9 @@ function buildMacosBundle() {
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>${appVersion}</string>
   <key>CFBundleVersion</key>
-  <string>1.0.0</string>
+  <string>${appVersion}</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
@@ -231,13 +249,7 @@ open "$TARGET_DIR/$APP_NAME"
 `;
   fs.writeFileSync(path.join(stageDir, 'Install-to-Applications.command'), installCommand, { mode: 0o755 });
 
-  // Export both .tar.gz and .zip (using python3 zipfile for universal compatibility)
-  const tarPath = path.join(releaseDir, `${folderName}.tar.gz`);
-  const zipPath = path.join(releaseDir, `${folderName}.zip`);
-  execSync(`tar -czf "${tarPath}" -C "${releaseDir}" "${folderName}"`);
-  execSync(
-    `python3 -c 'import shutil; shutil.make_archive("${path.join(releaseDir, folderName)}", "zip", "${releaseDir}", "${folderName}")'`
-  );
+  const { tarPath, zipPath } = archiveBundle(folderName);
   console.log(`Created macOS bundles: ${tarPath} and ${zipPath}`);
 }
 
@@ -245,7 +257,7 @@ open "$TARGET_DIR/$APP_NAME"
 // 2. Linux x64 Bundle (1-Click Desktop Menu Installer + Portable Launcher)
 // ============================================================================
 function buildLinuxBundle() {
-  const folderName = 'open-musicflow-v1.0.0-linux-x64';
+  const folderName = `open-musicflow-v${appVersion}-linux-x64`;
   const stageDir = path.join(releaseDir, folderName);
   fs.rmSync(stageDir, { recursive: true, force: true });
   fs.mkdirSync(stageDir, { recursive: true });
@@ -314,12 +326,7 @@ echo "✅ Added CLI command: ~/.local/bin/open-musicflow"
 `;
   fs.writeFileSync(path.join(stageDir, 'install-linux-desktop.sh'), installLinuxSh, { mode: 0o755 });
 
-  const tarPath = path.join(releaseDir, `${folderName}.tar.gz`);
-  const zipPath = path.join(releaseDir, `${folderName}.zip`);
-  execSync(`tar -czf "${tarPath}" -C "${releaseDir}" "${folderName}"`);
-  execSync(
-    `python3 -c 'import shutil; shutil.make_archive("${path.join(releaseDir, folderName)}", "zip", "${releaseDir}", "${folderName}")'`
-  );
+  const { tarPath, zipPath } = archiveBundle(folderName);
   console.log(`Created Linux bundles: ${tarPath} and ${zipPath}`);
 }
 
@@ -327,7 +334,7 @@ echo "✅ Added CLI command: ~/.local/bin/open-musicflow"
 // 3. Windows x64 Bundle (1-Click Desktop/Start Menu Installer + Launcher)
 // ============================================================================
 function buildWindowsBundle() {
-  const folderName = 'open-musicflow-v1.0.0-windows-x64';
+  const folderName = `open-musicflow-v${appVersion}-windows-x64`;
   const stageDir = path.join(releaseDir, folderName);
   fs.rmSync(stageDir, { recursive: true, force: true });
   fs.mkdirSync(stageDir, { recursive: true });
@@ -377,12 +384,7 @@ start "" "%DEST_DIR%\\Start-Open-MusicFlow.bat"
 `;
   fs.writeFileSync(path.join(stageDir, 'Install-Windows-App.bat'), installWinBat, { mode: 0o755 });
 
-  const tarPath = path.join(releaseDir, `${folderName}.tar.gz`);
-  const zipPath = path.join(releaseDir, `${folderName}.zip`);
-  execSync(`tar -czf "${tarPath}" -C "${releaseDir}" "${folderName}"`);
-  execSync(
-    `python3 -c 'import shutil; shutil.make_archive("${path.join(releaseDir, folderName)}", "zip", "${releaseDir}", "${folderName}")'`
-  );
+  const { tarPath, zipPath } = archiveBundle(folderName);
   console.log(`Created Windows bundles: ${tarPath} and ${zipPath}`);
 }
 

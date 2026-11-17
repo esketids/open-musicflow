@@ -1964,7 +1964,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.0-macos-universal.zip"
+                        href="/releases/open-musicflow-v1.0.1-macos-universal.zip"
                         download
                       >
                         Download macOS (.zip)
@@ -1972,7 +1972,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.0-macos-universal.tar.gz"
+                        href="/releases/open-musicflow-v1.0.1-macos-universal.tar.gz"
                         download
                       >
                         .tar.gz
@@ -1993,7 +1993,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.0-linux-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.0.1-linux-x64.tar.gz"
                         download
                       >
                         Download Linux (.tar.gz)
@@ -2001,7 +2001,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.0-linux-x64.zip"
+                        href="/releases/open-musicflow-v1.0.1-linux-x64.zip"
                         download
                       >
                         .zip
@@ -2021,7 +2021,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.0-windows-x64.zip"
+                        href="/releases/open-musicflow-v1.0.1-windows-x64.zip"
                         download
                       >
                         Download Windows (.zip)
@@ -2029,7 +2029,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.0-windows-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.0.1-windows-x64.tar.gz"
                         download
                       >
                         .tar.gz

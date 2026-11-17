@@ -18,11 +18,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Attach self-contained v1.0.0 bundles to GitHub Release
+      - name: Attach self-contained bundles to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload v1.0.0 releases/*.zip releases/*.tar.gz --clobber || true
+          TAG="v$(node -p "require('./package.json').version")"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Open MusicFlow Studio $TAG" --notes "Automated release for $TAG"
+          gh release upload "$TAG" releases/*.zip releases/*.tar.gz --clobber || true
 
   build:
     strategy:
@@ -63,15 +65,17 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload to GitHub Release v1.0.0
+      - name: Upload to GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Open MusicFlow Studio $TAG" --notes "Automated release for $TAG" || true
           shopt -s nullglob
-          FILES=(release/*.AppImage release/*.deb release/*.exe release/*.dmg)
+          FILES=(release/*.AppImage release/*.deb release/*.exe release/*.dmg release/*-${{ matrix.platform }}*.zip)
           if [ ${#FILES[@]} -gt 0 ]; then
-            gh release upload v1.0.0 "${FILES[@]}" --clobber || true
+            gh release upload "$TAG" "${FILES[@]}" --clobber || true
           fi
 
       - name: Upload Release Artifacts (${{ matrix.platform }})

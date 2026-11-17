@@ -535,9 +535,11 @@ ${ok ? '<script>setTimeout(() => { window.close(); }, 1500);</script>' : ''}
     res.json({ ok: true });
   });
 
-  const releaseDir = path.resolve(__dirname, '../../release');
-  if (fs.existsSync(releaseDir)) {
-    app.use('/releases', express.static(releaseDir));
+  for (const relFolder of ['../../releases', '../../release']) {
+    const dir = path.resolve(__dirname, relFolder);
+    if (fs.existsSync(dir)) {
+      app.use('/releases', express.static(dir));
+    }
   }
 
   if (staticDistDir && fs.existsSync(staticDistDir)) {
