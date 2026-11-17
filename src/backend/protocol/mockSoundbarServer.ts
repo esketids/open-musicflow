@@ -645,10 +645,13 @@ export class MockSoundbarServer {
       case 'PLAY_INFO_REQ':
       case 'LOCAL_PLAY_URL':
       case 'CP_PLAY_URL': {
-        if (typeof data.title === 'string') this.state.title = data.title;
-        if (typeof data.artist === 'string') this.state.artist = data.artist;
-        if (typeof data.album === 'string') this.state.album = data.album;
+        const item = (data.item as Record<string, unknown>) || data;
+        if (typeof item.title === 'string') this.state.title = item.title;
+        if (typeof item.artist === 'string') this.state.artist = item.artist;
+        if (typeof item.albumtitle === 'string') this.state.album = item.albumtitle;
+        else if (typeof item.album === 'string') this.state.album = item.album;
         if (typeof data.playing === 'number') this.state.playing = data.playing;
+        else if (msg === 'LOCAL_PLAY_URL') this.state.playing = 1;
         this.sendResponse(
           socket,
           {

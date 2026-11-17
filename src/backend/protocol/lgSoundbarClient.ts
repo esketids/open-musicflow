@@ -778,15 +778,13 @@ export class LgSoundbarClient extends EventEmitter {
       };
     } else if (alarm.sourceType === 'local_stream') {
       this.setFunction(0);
-      this.sendRawPacket({
-        msg: 'LOCAL_PLAY_URL',
-        data: {
-          title: alarm.title,
-          artist: 'Wi-Fi Alarm Stream',
-          album: 'Open MusicFlow DMS (:49252)',
-          playing: 1,
-          uri: `http://${this.getLocalLanIp()}:${LG_DMS_HTTP_PORT}/stream/${alarm.localTrackId || 'track-sunrise-flac'}.wav`,
-        },
+      this.sendLocalPlayUrl({
+        id: alarm.localTrackId || 'track-sunrise-flac',
+        title: alarm.title,
+        artist: 'Wi-Fi Alarm Stream',
+        album: 'Open MusicFlow DMS (:49252)',
+        durationSec: 180,
+        streamUrl: `http://${this.getLocalLanIp()}:${LG_DMS_HTTP_PORT}/stream/${alarm.localTrackId || 'track-sunrise-flac'}.wav`,
       });
     } else if (alarm.sourceType === 'input_switch' && typeof alarm.targetInput === 'number') {
       this.setFunction(alarm.targetInput);
@@ -866,7 +864,9 @@ export class LgSoundbarClient extends EventEmitter {
     durationSec: number;
     streamUrl: string;
   }): void {
-    this.state.currentFunction = 0; // Wi-Fi
+    if (this.state.currentFunction !== 0) {
+      this.setFunction(0);
+    }
     this.state.playInfo = {
       playing: true,
       title: track.title,
@@ -881,17 +881,39 @@ export class LgSoundbarClient extends EventEmitter {
       repeat: 0,
       cpType: 0,
     };
+    this.sendLocalPlayUrl(track);
+    this.emitState();
+  }
+
+  private sendLocalPlayUrl(track: {
+    id: string;
+    title: string;
+    artist: string;
+    album: string;
+    durationSec: number;
+    streamUrl: string;
+  }): void {
     this.sendRawPacket({
       msg: 'LOCAL_PLAY_URL',
       data: {
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        playing: 1,
-        uri: track.streamUrl,
+        item: {
+          title: track.title,
+          artist: track.artist,
+          uri: track.streamUrl,
+          albumart: '',
+          source: 1,
+          cptype: 0,
+          objID: track.id,
+          genre: '',
+          albumtitle: track.album,
+          duration: track.durationSec,
+        },
+        sync: false,
+        time: 0,
+        add: false,
+        position: 0,
       },
     });
-    this.emitState();
   }
 
   private applyIncomingPacket(pkt: Record<string, unknown>): void {
@@ -1157,16 +1179,26 @@ export class LgSoundbarClient extends EventEmitter {
     this.emit('state', this.state);
   }
 
-  private getLocalLanIp(): string {
+  public getLocalLanIp(): string {
     const nets = os.networkInterfaces();
+    const candidates: string[] = [];
     for (const name of Object.keys(nets)) {
       for (const netInfo of nets[name] || []) {
         if (netInfo.family === 'IPv4' && !netInfo.internal) {
-          return netInfo.address;
+          candidates.push(netInfo.address);
         }
       }
     }
-    return '127.0.0.1';
+    const hostParts = this.state.host.split('.');
+    if (hostParts.length === 4) {
+      const prefix = `${hostParts[0]}.${hostParts[1]}.${hostParts[2]}.`;
+      const sameSubnet = candidates.find((ip) => ip.startsWith(prefix));
+      if (sameSubnet) return sameSubnet;
+    }
+    const privateLan = candidates.find(
+      (ip) => ip.startsWith('192.168.') || ip.startsWith('10.')
+    );
+    return privateLan || candidates[0] || '127.0.0.1';
   }
 }
 

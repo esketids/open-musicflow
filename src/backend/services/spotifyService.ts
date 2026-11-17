@@ -5,7 +5,10 @@ import { LgSoundbarClient } from '../protocol/lgSoundbarClient';
 export class SpotifyService {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
+  private tokenExpiresAt = 0;
   private codeVerifier: string | null = null;
+  private redirectUri: string | null = null;
+  private oauthState: string | null = null;
   private soundbarClient: LgSoundbarClient;
 
   public state: SpotifyLinkState = {
@@ -109,9 +112,11 @@ export class SpotifyService {
     return this.state;
   }
 
-  public generatePkceAuthUrl(clientId: string, redirectUri: string): { authUrl: string } {
+  public generatePkceAuthUrl(clientId: string, redirectUri: string): { authUrl: string; state: string } {
     this.state.clientId = clientId.trim();
+    this.redirectUri = redirectUri.trim();
     this.codeVerifier = crypto.randomBytes(32).toString('base64url');
+    this.oauthState = crypto.randomBytes(16).toString('hex');
     const challenge = crypto
       .createHash('sha256')
       .update(this.codeVerifier)
@@ -120,7 +125,8 @@ export class SpotifyService {
     const params = new URLSearchParams({
       client_id: this.state.clientId,
       response_type: 'code',
-      redirect_uri: redirectUri,
+      redirect_uri: this.redirectUri,
+      state: this.oauthState,
       code_challenge_method: 'S256',
       code_challenge: challenge,
       scope:
@@ -129,26 +135,134 @@ export class SpotifyService {
 
     return {
       authUrl: `https://accounts.spotify.com/authorize?${params.toString()}`,
+      state: this.oauthState,
     };
+  }
+
+  public async exchangeAuthorizationCode(code: string, stateParam?: string): Promise<SpotifyLinkState> {
+    if (!this.codeVerifier || !this.state.clientId || !this.redirectUri) {
+      throw new Error('No active PKCE login session. Start OAuth login from the app first.');
+    }
+    if (this.oauthState && stateParam !== this.oauthState) {
+      throw new Error('OAuth state mismatch. Please restart the Spotify login flow.');
+    }
+
+    const body = new URLSearchParams({
+      client_id: this.state.clientId,
+      grant_type: 'authorization_code',
+      code: code.trim(),
+      redirect_uri: this.redirectUri,
+      code_verifier: this.codeVerifier,
+    });
+
+    const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    const tokenJson = (await tokenRes.json()) as Record<string, unknown>;
+    if (!tokenRes.ok || typeof tokenJson.access_token !== 'string') {
+      const errDesc = String(tokenJson.error_description || tokenJson.error || `HTTP ${tokenRes.status}`);
+      throw new Error(`Spotify token exchange failed: ${errDesc}`);
+    }
+
+    this.accessToken = tokenJson.access_token;
+    if (typeof tokenJson.refresh_token === 'string') {
+      this.refreshToken = tokenJson.refresh_token;
+    }
+    const expiresIn = Number(tokenJson.expires_in ?? 3600);
+    this.tokenExpiresAt = Date.now() + expiresIn * 1000;
+    this.codeVerifier = null;
+    this.oauthState = null;
+
+    await this.syncLiveAccountData();
+    return this.getState();
+  }
+
+  private async refreshAccessTokenIfNeeded(): Promise<void> {
+    if (!this.refreshToken || !this.state.clientId) return;
+    if (Date.now() < this.tokenExpiresAt - 60_000) return;
+
+    try {
+      const body = new URLSearchParams({
+        client_id: this.state.clientId,
+        grant_type: 'refresh_token',
+        refresh_token: this.refreshToken,
+      });
+      const res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as Record<string, unknown>;
+      if (typeof json.access_token === 'string') {
+        this.accessToken = json.access_token;
+        this.tokenExpiresAt = Date.now() + Number(json.expires_in ?? 3600) * 1000;
+      }
+      if (typeof json.refresh_token === 'string') {
+        this.refreshToken = json.refresh_token;
+      }
+    } catch {
+      // Keep existing token on transient network error
+    }
+  }
+
+  private async fetchWithAuth(url: string, init: RequestInit = {}): Promise<Response> {
+    await this.refreshAccessTokenIfNeeded();
+    return fetch(url, {
+      ...init,
+      headers: {
+        ...(init.headers || {}),
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+    });
+  }
+
+  public async syncLiveAccountData(): Promise<SpotifyLinkState> {
+    if (!this.accessToken) return this.getState();
+
+    const profileRes = await this.fetchWithAuth('https://api.spotify.com/v1/me');
+    if (profileRes.ok) {
+      const profile = (await profileRes.json()) as Record<string, unknown>;
+      this.state.displayName = String(profile.display_name || 'Spotify User');
+      this.state.email = String(profile.email || '');
+      this.state.product = String(profile.product || 'premium');
+      this.state.connected = true;
+    }
+
+    await this.refreshLiveSpotifyDevices();
+
+    try {
+      const plRes = await this.fetchWithAuth('https://api.spotify.com/v1/me/playlists?limit=20');
+      if (plRes.ok) {
+        const plBody = (await plRes.json()) as { items?: Array<Record<string, unknown>> };
+        if (Array.isArray(plBody.items) && plBody.items.length > 0) {
+          this.state.playlists = plBody.items.map((pl) => ({
+            id: String(pl.id || ''),
+            name: String(pl.name || 'Playlist'),
+            uri: String(pl.uri || ''),
+            trackCount: Number(((pl.tracks as Record<string, unknown>) || {}).total ?? 0),
+            description: String(pl.description || 'Spotify Library Playlist'),
+          }));
+        }
+      }
+    } catch {
+      // Keep existing playlists if playlist fetch fails
+    }
+
+    return this.getState();
   }
 
   public async setDirectAccessToken(token: string, clientId?: string): Promise<SpotifyLinkState> {
     this.accessToken = token.trim();
+    this.tokenExpiresAt = Date.now() + 3600 * 1000;
     if (clientId) this.state.clientId = clientId.trim();
 
     if (this.accessToken) {
       try {
-        const profileRes = await fetch('https://api.spotify.com/v1/me', {
-          headers: { Authorization: `Bearer ${this.accessToken}` },
-        });
-        if (profileRes.ok) {
-          const profile = (await profileRes.json()) as Record<string, unknown>;
-          this.state.displayName = String(profile.display_name || 'Spotify User');
-          this.state.email = String(profile.email || '');
-          this.state.product = String(profile.product || 'premium');
-          this.state.connected = true;
-        }
-        await this.refreshLiveSpotifyDevices();
+        await this.syncLiveAccountData();
       } catch {
         // Fallback to local Spotify Connect bridge mode if offline/sandboxed
         this.state.connected = true;
@@ -160,9 +274,7 @@ export class SpotifyService {
   public async refreshLiveSpotifyDevices(): Promise<void> {
     if (!this.accessToken) return;
     try {
-      const res = await fetch('https://api.spotify.com/v1/me/player/devices', {
-        headers: { Authorization: `Bearer ${this.accessToken}` },
-      });
+      const res = await this.fetchWithAuth('https://api.spotify.com/v1/me/player/devices');
       if (res.ok) {
         const body = (await res.json()) as { devices?: Array<Record<string, unknown>> };
         if (Array.isArray(body.devices) && body.devices.length > 0) {
@@ -172,10 +284,15 @@ export class SpotifyService {
             type: String(d.type || 'Speaker'),
             is_active: Boolean(d.is_active),
             volume_percent: Number(d.volume_percent ?? 50),
-            isSoundbarMatch: /lg|music\s*flow|sound\s*bar|hs[0-9]|las[0-9]|np8/i.test(
+            isSoundbarMatch: /lg|music\s*flow|sound\s*bar|hs[0-9]|las[0-9]|np8|sj[0-9]/i.test(
               String(d.name || '')
             ),
           }));
+          const active = this.state.devices.find((d) => d.is_active) || this.state.devices.find((d) => d.isSoundbarMatch);
+          if (active) {
+            this.state.activeDeviceId = active.id;
+            this.state.activeDeviceName = active.name;
+          }
         }
       }
     } catch {
@@ -201,12 +318,9 @@ export class SpotifyService {
 
     if (this.accessToken) {
       try {
-        await fetch('https://api.spotify.com/v1/me/player', {
+        await this.fetchWithAuth('https://api.spotify.com/v1/me/player', {
           method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_ids: [deviceId], play: true }),
         });
       } catch {
@@ -246,16 +360,13 @@ export class SpotifyService {
 
     if (this.accessToken && this.state.activeDeviceId) {
       try {
-        await fetch(
+        await this.fetchWithAuth(
           `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(
             this.state.activeDeviceId
           )}`,
           {
             method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${this.accessToken}`,
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(
               uri.includes(':track:') ? { uris: [uri] } : { context_uri: uri }
             ),

@@ -365,10 +365,11 @@ export default function App() {
       showToast('Enter your Spotify Developer Client ID first');
       return;
     }
+    const redirectUri = `${window.location.origin}/api/spotify/callback`;
     const res = await fetch('/api/spotify/auth-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId: spotifyClientId }),
+      body: JSON.stringify({ clientId: spotifyClientId, redirectUri }),
     });
     const data = await res.json();
     if (data.ok && data.authUrl) {
@@ -1519,6 +1520,9 @@ export default function App() {
                       <ExternalLink size={14} />
                       Start OAuth 2.0 PKCE Login
                     </button>
+                    <div className="panel-meta" style={{ marginTop: 6 }}>
+                      Redirect URI: <code>{`${window.location.origin}/api/spotify/callback`}</code>
+                    </div>
                   </div>
 
                   <div className="fader-card">

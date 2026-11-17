@@ -8,6 +8,7 @@ import {
 } from '../src/backend/protocol/lgWireCodec';
 import { MockSoundbarServer } from '../src/backend/protocol/mockSoundbarServer';
 import { LgSoundbarClient } from '../src/backend/protocol/lgSoundbarClient';
+import { SpotifyService } from '../src/backend/services/spotifyService';
 
 test('AES-256-CBC 0x10 framing (sj8_v1 and temescal_v2) and 0x00 plain framing encode/decode split and concatenated frames', () => {
   const framer = new LgPacketFramer();
@@ -125,4 +126,28 @@ test('LgSoundbarClient communicates over TCP 9741 with LG SJ8 MockSoundbarServer
     client.disconnect();
     await sim.stop();
   }
+});
+
+test('SpotifyService PKCE OAuth URL generation and state validation', async () => {
+  const client = new LgSoundbarClient();
+  const spotify = new SpotifyService(client);
+  const { authUrl, state } = spotify.generatePkceAuthUrl(
+    'test-client-id',
+    'http://127.0.0.1:4743/api/spotify/callback'
+  );
+
+  const parsed = new URL(authUrl);
+  assert.equal(parsed.origin + parsed.pathname, 'https://accounts.spotify.com/authorize');
+  assert.equal(parsed.searchParams.get('client_id'), 'test-client-id');
+  assert.equal(parsed.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(parsed.searchParams.get('state'), state);
+  assert.equal(
+    parsed.searchParams.get('redirect_uri'),
+    'http://127.0.0.1:4743/api/spotify/callback'
+  );
+
+  await assert.rejects(
+    () => spotify.exchangeAuthorizationCode('fake-code', 'wrong-state'),
+    /OAuth state mismatch/
+  );
 });
