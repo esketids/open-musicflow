@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Open-source cleanroom implementation of LG Music Flow PC Software for Linux, Windows, and macOS",
   "main": "dist-electron/electron/main.js",
-  "author": "Open MusicFlow Contributors",
+  "author": "Open MusicFlow Contributors <maintainers@open-musicflow.local>",
   "license": "MIT",
   "scripts": {
     "dev:server": "tsx src/backend/standaloneServer.ts",
