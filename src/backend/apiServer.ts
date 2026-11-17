@@ -353,17 +353,70 @@ export async function createBackendServer(
 
   // === Spotify Linking & Connect ===
 
+  let boundApiPort = preferredPort;
+
   app.post('/api/spotify/auth-url', (req, res) => {
     const clientId = String(req.body.clientId || '').trim();
-    const redirectUri = String(
-      req.body.redirectUri || `http://127.0.0.1:${preferredPort}/api/spotify/callback`
-    );
+    const hostHeader = req.headers.host || `127.0.0.1:${boundApiPort}`;
+    const defaultRedirect = `http://${hostHeader}/api/spotify/callback`;
+    const redirectUri = String(req.body.redirectUri || defaultRedirect).trim();
     if (!clientId) {
       res.status(400).json({ error: 'Spotify Client ID is required' });
       return;
     }
-    const { authUrl } = spotifyService.generatePkceAuthUrl(clientId, redirectUri);
-    res.json({ ok: true, authUrl });
+    const { authUrl, state } = spotifyService.generatePkceAuthUrl(clientId, redirectUri);
+    res.json({ ok: true, authUrl, state, redirectUri });
+  });
+
+  app.get('/api/spotify/callback', async (req, res) => {
+    const error = req.query.error ? String(req.query.error) : '';
+    const code = req.query.code ? String(req.query.code) : '';
+    const stateParam = req.query.state ? String(req.query.state) : undefined;
+
+    const renderPage = (title: string, bodyText: string, ok: boolean) => `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>${title}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0c0e12; color: #f3f4f6; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+  .card { background: #161a22; border: 1px solid ${ok ? '#1db954' : '#ef4444'}; border-radius: 12px; padding: 24px 28px; max-width: 440px; text-align: center; }
+  h1 { margin: 0 0 10px; font-size: 20px; color: ${ok ? '#1db954' : '#f87171'}; }
+  p { margin: 0 0 16px; color: #cbd5e1; line-height: 1.5; }
+  a { color: #1db954; text-decoration: none; font-weight: 600; }
+</style></head>
+<body><div class="card"><h1>${title}</h1><p>${bodyText}</p><a href="/">Return to Open MusicFlow Studio</a></div>
+${ok ? '<script>setTimeout(() => { window.close(); }, 1500);</script>' : ''}
+</body></html>`;
+
+    if (error) {
+      res.status(400).send(renderPage('Spotify Authorization Cancelled', `Spotify returned: ${error}`, false));
+      return;
+    }
+    if (!code) {
+      res.status(400).send(renderPage('Missing Authorization Code', 'No ?code parameter was returned by Spotify.', false));
+      return;
+    }
+
+    try {
+      const state = await spotifyService.exchangeAuthorizationCode(code, stateParam);
+      broadcast('spotify', state);
+      res.send(
+        renderPage(
+          'Spotify Connected!',
+          `Signed in as ${state.displayName} (${state.devices.length} device(s) found). You can close this window.`,
+          true
+        )
+      );
+    } catch (err) {
+      res
+        .status(500)
+        .send(renderPage('Spotify OAuth Failed', (err as Error).message, false));
+    }
+  });
+
+  app.post('/api/spotify/refresh', async (_req, res) => {
+    const state = await spotifyService.syncLiveAccountData();
+    broadcast('spotify', state);
+    res.json({ ok: true, spotify: state });
   });
 
   app.post('/api/spotify/token', async (req, res) => {
@@ -414,7 +467,7 @@ export async function createBackendServer(
       res.status(404).json({ ok: false, error: 'Track not found' });
       return;
     }
-    const streamUrl = `http://192.168.1.176:${LG_DMS_HTTP_PORT}${track.streamPath}`;
+    const streamUrl = `http://${soundbarClient.getLocalLanIp()}:${LG_DMS_HTTP_PORT}${track.streamPath}`;
     soundbarClient.playLocalStreamOnSoundbar({
       id: track.id,
       title: track.title,
@@ -433,7 +486,7 @@ export async function createBackendServer(
     const track = mediaService.getTracks().find((t) => t.id === trackId);
 
     if (track?.filePath && fs.existsSync(track.filePath)) {
-      res.sendFile(track.filePath);
+      res.sendFile(track.filePath, { dotfiles: 'allow' });
       return;
     }
 
@@ -505,6 +558,7 @@ export async function createBackendServer(
       }
     });
     server.listen(portToTry, '0.0.0.0', () => {
+      boundApiPort = portToTry;
       resolve(portToTry);
     });
   });
