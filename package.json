@@ -10,7 +10,7 @@
     "dev:vite": "vite --port 5173 --host 0.0.0.0",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:vite\"",
     "build:frontend": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json && ./node_modules/.bin/esbuild src/backend/standaloneServer.ts --bundle --platform=node --target=node18 --format=cjs --external:bufferutil --external:utf-8-validate --outfile=dist-electron/backend/standaloneServer.js && ./node_modules/.bin/esbuild src/electron/main.ts --bundle --platform=node --target=node18 --format=cjs --external:electron --external:bufferutil --external:utf-8-validate --outfile=dist-electron/electron/main.js",
+    "build:electron": "tsc -p tsconfig.electron.json && esbuild src/backend/standaloneServer.ts --bundle --platform=node --target=node18 --format=cjs --external:bufferutil --external:utf-8-validate --outfile=dist-electron/backend/standaloneServer.js && esbuild src/electron/main.ts --bundle --platform=node --target=node18 --format=cjs --external:electron --external:bufferutil --external:utf-8-validate --outfile=dist-electron/electron/main.js",
     "build": "npm run build:frontend && npm run build:electron",
     "electron:start": "npm run build && electron .",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb tar.gz",
