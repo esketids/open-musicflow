@@ -209,3 +209,24 @@ test('SpotifyService PKCE OAuth URL generation and state validation', async () =
     /OAuth state mismatch/
   );
 });
+
+test('SpotifyService imports playlists by URL/URI and returns tracks for song selection', async () => {
+  const client = new LgSoundbarClient();
+  const spotify = new SpotifyService(client);
+
+  const initialCount = spotify.getState().playlists.length;
+  const afterUrlImport = await spotify.importPlaylistByUri(
+    'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123'
+  );
+  assert.equal(afterUrlImport.playlists.length, initialCount + 1);
+  assert.equal(afterUrlImport.playlists[0].id, '37i9dQZF1DXcBWIGoYBM5M');
+  assert.equal(afterUrlImport.playlists[0].uri, 'spotify:playlist:37i9dQZF1DXcBWIGoYBM5M');
+
+  const tracks = await spotify.getPlaylistTracks('pl-morning-jazz');
+  assert.ok(tracks.length >= 3);
+  assert.equal(tracks[0].name, 'Blue in Green');
+  assert.ok(tracks[0].uri.startsWith('spotify:track:'));
+
+  const importedTracks = await spotify.getPlaylistTracks('37i9dQZF1DXcBWIGoYBM5M');
+  assert.ok(importedTracks.length >= 1);
+});

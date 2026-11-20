@@ -134,6 +134,16 @@ export interface SpotifyLinkState {
   }>;
 }
 
+export interface SpotifyTrack {
+  id: string;
+  name: string;
+  artist: string;
+  album: string;
+  durationMs: number;
+  uri: string;
+  albumArt?: string;
+}
+
 export interface MultiRoomSpeakerNode {
   id: string;
   name: string;

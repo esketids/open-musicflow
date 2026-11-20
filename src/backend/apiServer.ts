@@ -419,6 +419,26 @@ ${ok ? '<script>setTimeout(() => { window.close(); }, 1500);</script>' : ''}
     res.json({ ok: true, spotify: state });
   });
 
+  app.get('/api/spotify/playlists/:id/tracks', async (req, res) => {
+    try {
+      const tracks = await spotifyService.getPlaylistTracks(String(req.params.id || ''));
+      res.json({ ok: true, tracks });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/spotify/playlists/import', async (req, res) => {
+    try {
+      const uri = String(req.body.uri || '');
+      const state = await spotifyService.importPlaylistByUri(uri);
+      broadcast('spotify', state);
+      res.json({ ok: true, spotify: state });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: (err as Error).message });
+    }
+  });
+
   app.post('/api/spotify/token', async (req, res) => {
     const token = String(req.body.accessToken || '');
     const clientId = req.body.clientId ? String(req.body.clientId) : undefined;

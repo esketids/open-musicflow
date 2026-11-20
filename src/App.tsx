@@ -40,6 +40,7 @@ import {
   ProtocolDialect,
   SoundbarState,
   SpotifyLinkState,
+  SpotifyTrack,
 } from './shared/protocolTypes';
 
 type NavTab = 'audio' | 'alarms' | 'spotify' | 'media' | 'sj8setup' | 'mesh' | 'inspector';
@@ -114,6 +115,15 @@ export default function App() {
   const [customSpotifyUri, setCustomSpotifyUri] = useState<string>(
     'spotify:playlist:37i9dQZF1DXbITWG1ZJKYt'
   );
+  const [importPlaylistUri, setImportPlaylistUri] = useState<string>('');
+  const [selectedPlaylist, setSelectedPlaylist] = useState<{
+    id: string;
+    name: string;
+    uri: string;
+  } | null>(null);
+  const [playlistTracks, setPlaylistTracks] = useState<SpotifyTrack[]>([]);
+  const [loadingTracks, setLoadingTracks] = useState<boolean>(false);
+  const [trackFilter, setTrackFilter] = useState<string>('');
 
   // Local Media Folder Scan & Browser Preview
   const [scanFolderInput, setScanFolderInput] = useState<string>('/home/antigravity');
@@ -455,6 +465,52 @@ export default function App() {
     if (data.ok && data.authUrl) {
       window.open(data.authUrl, '_blank', 'noopener,noreferrer');
       showToast('Opened Spotify OAuth 2.0 PKCE authorization window');
+    }
+  };
+
+  const handleSyncSpotifyProfile = async () => {
+    const res = await fetch('/api/spotify/refresh', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok && data.spotify) {
+      setSpotify(data.spotify);
+      showToast(`Synced Spotify profile & ${data.spotify.playlists?.length ?? 0} playlists`);
+    }
+  };
+
+  const handleImportSpotifyPlaylist = async () => {
+    if (!importPlaylistUri.trim()) {
+      showToast('Enter a Spotify playlist URL or URI first');
+      return;
+    }
+    const res = await fetch('/api/spotify/playlists/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uri: importPlaylistUri }),
+    });
+    const data = await res.json();
+    if (data.ok && data.spotify) {
+      setSpotify(data.spotify);
+      setImportPlaylistUri('');
+      showToast('Imported Spotify playlist');
+    } else {
+      showToast(data.error || 'Failed to import playlist');
+    }
+  };
+
+  const handleOpenPlaylistTracks = async (pl: { id: string; name: string; uri: string }) => {
+    setSelectedPlaylist(pl);
+    setTrackFilter('');
+    setLoadingTracks(true);
+    try {
+      const res = await fetch(`/api/spotify/playlists/${encodeURIComponent(pl.id)}/tracks`);
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.tracks)) {
+        setPlaylistTracks(data.tracks);
+      } else {
+        setPlaylistTracks([]);
+      }
+    } finally {
+      setLoadingTracks(false);
     }
   };
 
@@ -2091,6 +2147,25 @@ export default function App() {
                   </div>
                 </div>
 
+                <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <input
+                    id="input-import-spotify-playlist"
+                    className="input-field mono"
+                    style={{ flex: 1, minWidth: 260 }}
+                    value={importPlaylistUri}
+                    onChange={(e) => setImportPlaylistUri(e.target.value)}
+                    placeholder="Import playlist URL or URI (https://open.spotify.com/playlist/... or spotify:playlist:...)"
+                  />
+                  <button
+                    id="btn-import-spotify-playlist"
+                    className="btn btn-primary"
+                    onClick={handleImportSpotifyPlaylist}
+                  >
+                    <Plus size={14} />
+                    Import Playlist
+                  </button>
+                </div>
+
                 <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
                   <input
                     id="input-custom-spotify-uri"
@@ -2112,7 +2187,14 @@ export default function App() {
 
                 <div className="fader-grid">
                   {spotify.playlists.map((pl) => (
-                    <div key={pl.id} className="fader-card">
+                    <div
+                      key={pl.id}
+                      className="fader-card"
+                      style={{
+                        borderColor:
+                          selectedPlaylist?.id === pl.id ? 'var(--accent-spotify)' : undefined,
+                      }}
+                    >
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{pl.name}</div>
                       <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                         {pl.description}
@@ -2126,7 +2208,7 @@ export default function App() {
                       >
                         {pl.uri} ({pl.trackCount} tracks)
                       </div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                         <button
                           id={`btn-play-playlist-${pl.id}`}
                           className="btn btn-spotify"
@@ -2135,6 +2217,14 @@ export default function App() {
                         >
                           <Play size={14} />
                           Play on SJ8
+                        </button>
+                        <button
+                          id={`btn-browse-playlist-${pl.id}`}
+                          className="btn"
+                          onClick={() => handleOpenPlaylistTracks(pl)}
+                        >
+                          <Music size={14} />
+                          Select Songs
                         </button>
                         <button
                           id={`btn-use-playlist-alarm-${pl.id}`}
@@ -2154,6 +2244,91 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+
+                {selectedPlaylist && (
+                  <div
+                    id="spotify-playlist-tracks-panel"
+                    style={{
+                      marginTop: 20,
+                      paddingTop: 16,
+                      borderTop: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <div className="panel-header" style={{ marginBottom: 12 }}>
+                      <div className="panel-title">
+                        <span>Songs in &ldquo;{selectedPlaylist.name}&rdquo;</span>
+                      </div>
+                      <input
+                        id="input-filter-spotify-tracks"
+                        className="input-field"
+                        style={{ maxWidth: 260 }}
+                        value={trackFilter}
+                        onChange={(e) => setTrackFilter(e.target.value)}
+                        placeholder="Filter songs or artists..."
+                      />
+                    </div>
+                    {loadingTracks ? (
+                      <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                        Loading songs from Spotify...
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {playlistTracks
+                          .filter((t) => {
+                            if (!trackFilter.trim()) return true;
+                            const q = trackFilter.toLowerCase();
+                            return (
+                              t.name.toLowerCase().includes(q) ||
+                              t.artist.toLowerCase().includes(q) ||
+                              t.album.toLowerCase().includes(q)
+                            );
+                          })
+                          .map((track) => (
+                            <div
+                              key={track.id}
+                              className="fader-card"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 12,
+                              }}
+                            >
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontWeight: 600, fontSize: 13 }}>{track.name}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                  {track.artist} • {track.album}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button
+                                  className="btn btn-spotify"
+                                  onClick={() => handleSpotifyPlayUri(track.uri, track.name)}
+                                >
+                                  <Play size={14} />
+                                  Play Song
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() => {
+                                    setAlarmSource('spotify');
+                                    setAlarmSpotifyUri(track.uri);
+                                    setAlarmTitle(`Wakeup: ${track.name}`);
+                                    setActiveTab('alarms');
+                                    showToast(`Linked "${track.name}" to Wi-Fi Alarm form`);
+                                  }}
+                                >
+                                  <Bell size={14} />
+                                  Alarm
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
 
               {/* OAuth 2.0 PKCE & Web API Token Configuration */}

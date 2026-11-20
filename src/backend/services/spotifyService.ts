@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { SpotifyLinkState } from '../../shared/protocolTypes';
+import { SpotifyLinkState, SpotifyTrack } from '../../shared/protocolTypes';
 import { LgSoundbarClient } from '../protocol/lgSoundbarClient';
 
 export class SpotifyService {
@@ -132,7 +132,7 @@ export class SpotifyService {
       code_challenge_method: 'S256',
       code_challenge: challenge,
       scope:
-        'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private user-read-email',
+        'user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative user-read-email',
     });
 
     return {
@@ -255,6 +255,135 @@ export class SpotifyService {
     }
 
     return this.getState();
+  }
+
+  public async importPlaylistByUri(uriOrUrl: string): Promise<SpotifyLinkState> {
+    const raw = uriOrUrl.trim();
+    if (!raw) throw new Error('Playlist URI or URL is required');
+
+    let playlistId = raw;
+    const uriMatch = raw.match(/spotify:playlist:([a-zA-Z0-9]+)/);
+    const urlMatch = raw.match(/open\.spotify\.com\/playlist\/([a-zA-Z0-9]+)/);
+    if (uriMatch) playlistId = uriMatch[1];
+    else if (urlMatch) playlistId = urlMatch[1];
+
+    const normalizedUri = `spotify:playlist:${playlistId}`;
+
+    if (this.accessToken) {
+      try {
+        const res = await this.fetchWithAuth(
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`
+        );
+        if (res.ok) {
+          const pl = (await res.json()) as Record<string, unknown>;
+          const entry = {
+            id: String(pl.id || playlistId),
+            name: String(pl.name || 'Imported Playlist'),
+            uri: String(pl.uri || normalizedUri),
+            trackCount: Number(((pl.tracks as Record<string, unknown>) || {}).total ?? 0),
+            description: String(pl.description || 'Imported from Spotify'),
+          };
+          const idx = this.state.playlists.findIndex((p) => p.id === entry.id || p.uri === entry.uri);
+          if (idx >= 0) this.state.playlists[idx] = entry;
+          else this.state.playlists.unshift(entry);
+          return this.getState();
+        }
+      } catch {
+        // Fall through to local import
+      }
+    }
+
+    const exists = this.state.playlists.some((p) => p.id === playlistId || p.uri === normalizedUri);
+    if (!exists) {
+      this.state.playlists.unshift({
+        id: playlistId,
+        name: `Imported Playlist (${playlistId.slice(0, 8)})`,
+        uri: normalizedUri,
+        trackCount: 0,
+        description: 'Imported Spotify Playlist URI',
+      });
+    }
+    return this.getState();
+  }
+
+  public async getPlaylistTracks(playlistId: string): Promise<SpotifyTrack[]> {
+    const matchedPlaylist = this.state.playlists.find(
+      (p) => p.id === playlistId || p.uri === playlistId
+    );
+    const resolvedId = matchedPlaylist?.uri.split(':').pop() || playlistId;
+
+    if (this.accessToken) {
+      try {
+        const res = await this.fetchWithAuth(
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(resolvedId)}/tracks?limit=50`
+        );
+        if (res.ok) {
+          const body = (await res.json()) as {
+            items?: Array<{ track?: Record<string, unknown> | null }>;
+          };
+          if (Array.isArray(body.items)) {
+            const tracks: SpotifyTrack[] = [];
+            for (const item of body.items) {
+              const t = item.track;
+              if (!t || typeof t.uri !== 'string') continue;
+              const artists = Array.isArray(t.artists)
+                ? (t.artists as Array<Record<string, unknown>>)
+                    .map((a) => String(a.name || ''))
+                    .filter(Boolean)
+                    .join(', ')
+                : 'Unknown Artist';
+              const albumObj = (t.album as Record<string, unknown>) || {};
+              const images = Array.isArray(albumObj.images)
+                ? (albumObj.images as Array<Record<string, unknown>>)
+                : [];
+              tracks.push({
+                id: String(t.id || t.uri),
+                name: String(t.name || 'Unknown Track'),
+                artist: artists || 'Unknown Artist',
+                album: String(albumObj.name || 'Unknown Album'),
+                durationMs: Number(t.duration_ms ?? 0),
+                uri: t.uri,
+                albumArt: typeof images[0]?.url === 'string' ? images[0].url : undefined,
+              });
+            }
+            return tracks;
+          }
+        }
+      } catch {
+        // Fallback to curated tracks below
+      }
+    }
+
+    // Fallback curated tracks for offline / Spotify Connect bridge mode
+    const fallbackTracks: Record<string, SpotifyTrack[]> = {
+      'pl-morning-jazz': [
+        { id: 'mj-1', name: 'Blue in Green', artist: 'Miles Davis', album: 'Kind of Blue', durationMs: 327000, uri: 'spotify:track:0aWMVrwxPN6Kqyv83635hN' },
+        { id: 'mj-2', name: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out', durationMs: 324000, uri: 'spotify:track:1YQWosTIljIvxAgHWTp7KP' },
+        { id: 'mj-3', name: 'Autumn Leaves', artist: 'Cannonball Adderley', album: "Somethin' Else", durationMs: 659000, uri: 'spotify:track:0X5DcGkbxCXSadgj01ZXd7' },
+      ],
+      'pl-synthwave-night': [
+        { id: 'sw-1', name: 'Midnight City', artist: 'M83', album: "Hurry Up, We're Dreaming", durationMs: 243000, uri: 'spotify:track:1eyzqe2QqGZUmfcPZtrIyt' },
+        { id: 'sw-2', name: 'Nightcall', artist: 'Kavinsky', album: 'OutRun', durationMs: 258000, uri: 'spotify:track:0U0ldCRmgCqhVvD6ksG63j' },
+        { id: 'sw-3', name: 'Tech Noir', artist: 'GUNSHIP', album: 'GUNSHIP', durationMs: 297000, uri: 'spotify:track:5VKEsChbUjpVE2POvhlG34' },
+      ],
+      'pl-acoustic-wakeup': [
+        { id: 'aw-1', name: 'Here Comes The Sun', artist: 'The Beatles', album: 'Abbey Road', durationMs: 185000, uri: 'spotify:track:6dGnYIeXmHdcikdzNNDMm2' },
+        { id: 'aw-2', name: 'Banana Pancakes', artist: 'Jack Johnson', album: 'In Between Dreams', durationMs: 191000, uri: 'spotify:track:451GvHwY99NKV4zdKPRWjr' },
+      ],
+    };
+
+    return (
+      fallbackTracks[playlistId] || [
+        {
+          id: `${playlistId}-1`,
+          name: `${matchedPlaylist?.name || 'Playlist'} — Track 1`,
+          artist: 'Spotify Connect',
+          album: matchedPlaylist?.description || 'LG Music Flow',
+          durationMs: 215000,
+          uri: matchedPlaylist?.uri || `spotify:playlist:${resolvedId}`,
+        },
+      ]
+    );
   }
 
   public async setDirectAccessToken(token: string, clientId?: string): Promise<SpotifyLinkState> {
