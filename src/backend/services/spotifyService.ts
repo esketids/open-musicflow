@@ -24,11 +24,10 @@ export class SpotifyService {
       name: 'Midnight City',
       artist: 'M83',
       album: "Hurry Up, We're Dreaming",
-      DurationMs: 243000,
       durationMs: 243000,
       progressMs: 64000,
       uri: 'spotify:track:1eyzqe2QqGZUmfcPZtrIyt',
-    } as SpotifyLinkState['currentTrack'],
+    },
     devices: [
       {
         id: 'lg-musicflow-hs9-connect',
@@ -334,11 +333,25 @@ export class SpotifyService {
     return this.getState();
   }
 
+  private getRealSpotifyDeviceId(): string | null {
+    const id = this.state.activeDeviceId?.trim() || '';
+    if (
+      !id ||
+      id.startsWith('lg-musicflow-') ||
+      id.startsWith('lg-sj8-') ||
+      id === 'desktop-workstation-app'
+    ) {
+      return null;
+    }
+    return id;
+  }
+
   public async playSpotifyUriOnSoundbar(uri: string, title?: string): Promise<SpotifyLinkState> {
     const matchedPlaylist = this.state.playlists.find((p) => p.uri === uri);
     const displayTitle = title || matchedPlaylist?.name || 'Spotify Connect Stream';
 
     this.state.isPlaying = true;
+    this.soundbarClient.state.playInfo.playing = true;
     this.state.currentTrack = {
       name: displayTitle,
       artist: 'Spotify Connect • LG Music Flow',
@@ -348,7 +361,7 @@ export class SpotifyService {
       uri,
     };
 
-    // Switch soundbar to Spotify function (8) and dispatch CP_PLAY_URL / PLAY_INFO update
+    // Switch soundbar to Spotify function (8) and dispatch CP_PLAY_URL (playing: 0 = PLAY_STATE_NORMAL in LG APK)
     this.soundbarClient.setFunction(8);
     this.soundbarClient.sendRawPacket({
       msg: 'CP_PLAY_URL',
@@ -356,17 +369,19 @@ export class SpotifyService {
         title: displayTitle,
         artist: 'Spotify Connect',
         album: uri,
-        playing: 1,
+        playing: 0,
         uri,
       },
     });
 
-    if (this.accessToken && this.state.activeDeviceId) {
+    const realDeviceId = this.getRealSpotifyDeviceId();
+    if (this.accessToken) {
       try {
+        const deviceQuery = realDeviceId
+          ? `?device_id=${encodeURIComponent(realDeviceId)}`
+          : '';
         await this.fetchWithAuth(
-          `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(
-            this.state.activeDeviceId
-          )}`,
+          `https://api.spotify.com/v1/me/player/play${deviceQuery}`,
           {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -383,30 +398,126 @@ export class SpotifyService {
     return this.getState();
   }
 
-  public async togglePlayPause(): Promise<SpotifyLinkState> {
-    const currentlyPlaying = this.soundbarClient.state.connected
-      ? this.soundbarClient.state.playInfo.playing
-      : this.state.isPlaying;
-    const targetPlaying = !currentlyPlaying;
-    this.state.isPlaying = targetPlaying;
+  public async controlPlayback(params: {
+    action?: string;
+    playctrl?: number;
+    repeat?: number;
+    shuffle?: boolean;
+    time?: number;
+  }): Promise<SpotifyLinkState> {
+    const action = (params.action || '').toLowerCase().trim();
+    const realDeviceId = this.getRealSpotifyDeviceId();
+    const deviceQuery = realDeviceId ? `?device_id=${encodeURIComponent(realDeviceId)}` : '';
 
-    this.soundbarClient.sendPlayCommand(targetPlaying ? 0 : 1);
+    if (action === 'seek' || typeof params.time === 'number') {
+      const targetSec = Math.max(0, Math.round(Number(params.time ?? 0)));
+      this.soundbarClient.sendSeekCommand(targetSec);
+      if (this.state.currentTrack) {
+        this.state.currentTrack.progressMs = targetSec * 1000;
+      }
+      if (this.accessToken) {
+        try {
+          const sep = deviceQuery ? '&' : '?';
+          await this.fetchWithAuth(
+            `https://api.spotify.com/v1/me/player/seek${deviceQuery}${sep}position_ms=${targetSec * 1000}`,
+            { method: 'PUT' }
+          );
+        } catch {
+          // Handled via TCP 9741 LOCAL_TIME_SEARCH
+        }
+      }
+      return this.getState();
+    }
+
+    let playctrl: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+    if (typeof params.playctrl === 'number' && params.playctrl >= 0 && params.playctrl <= 8) {
+      playctrl = Math.round(params.playctrl) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+    } else if (action === 'play' || action === 'resume') {
+      playctrl = 0;
+    } else if (action === 'pause') {
+      playctrl = 1;
+    } else if (action === 'stop') {
+      playctrl = 2;
+    } else if (action === 'prev' || action === 'previous') {
+      playctrl = 3;
+    } else if (action === 'prev_scan' || action === 'rewind') {
+      playctrl = 4;
+    } else if (action === 'next') {
+      playctrl = 5;
+    } else if (action === 'next_scan' || action === 'ff' || action === 'fast_forward') {
+      playctrl = 6;
+    } else if (action === 'repeat') {
+      playctrl = 7;
+    } else if (action === 'shuffle') {
+      playctrl = 8;
+    } else {
+      // Default: toggle play/pause
+      const currentlyPlaying = this.soundbarClient.state.connected
+        ? this.soundbarClient.state.playInfo.playing
+        : this.state.isPlaying;
+      playctrl = currentlyPlaying ? 1 : 0;
+    }
+
+    if (playctrl === 0) this.state.isPlaying = true;
+    else if (playctrl === 1 || playctrl === 2) this.state.isPlaying = false;
+
+    this.soundbarClient.sendPlayCommand(playctrl, {
+      repeat: params.repeat,
+      shuffle: params.shuffle,
+    });
 
     if (this.accessToken) {
       try {
-        const endpoint = targetPlaying ? 'play' : 'pause';
-        const deviceQuery = this.state.activeDeviceId
-          ? `?device_id=${encodeURIComponent(this.state.activeDeviceId)}`
-          : '';
-        await this.fetchWithAuth(
-          `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
-          { method: 'PUT' }
-        );
+        if (playctrl === 0) {
+          await this.fetchWithAuth(`https://api.spotify.com/v1/me/player/play${deviceQuery}`, {
+            method: 'PUT',
+          });
+        } else if (playctrl === 1 || playctrl === 2) {
+          await this.fetchWithAuth(`https://api.spotify.com/v1/me/player/pause${deviceQuery}`, {
+            method: 'PUT',
+          });
+        } else if (playctrl === 3) {
+          await this.fetchWithAuth(`https://api.spotify.com/v1/me/player/previous${deviceQuery}`, {
+            method: 'POST',
+          });
+        } else if (playctrl === 5) {
+          await this.fetchWithAuth(`https://api.spotify.com/v1/me/player/next${deviceQuery}`, {
+            method: 'POST',
+          });
+        } else if (playctrl === 7) {
+          const repState =
+            this.soundbarClient.state.playInfo.repeat === 1
+              ? 'track'
+              : this.soundbarClient.state.playInfo.repeat === 2
+                ? 'context'
+                : 'off';
+          const sep = deviceQuery ? '&' : '?';
+          await this.fetchWithAuth(
+            `https://api.spotify.com/v1/me/player/repeat${deviceQuery}${sep}state=${repState}`,
+            { method: 'PUT' }
+          );
+        } else if (playctrl === 8) {
+          const sep = deviceQuery ? '&' : '?';
+          await this.fetchWithAuth(
+            `https://api.spotify.com/v1/me/player/shuffle${deviceQuery}${sep}state=${Boolean(this.soundbarClient.state.playInfo.shuffle)}`,
+            { method: 'PUT' }
+          );
+        }
       } catch {
         // Handled via TCP 9741 PLAY_CMD
       }
     }
 
     return this.getState();
+  }
+
+  public async togglePlayPause(params?: {
+    action?: string;
+    playctrl?: number;
+    repeat?: number;
+    shuffle?: boolean;
+    time?: number;
+  }): Promise<SpotifyLinkState> {
+    return this.controlPlayback(params || { action: 'toggle' });
   }
 }

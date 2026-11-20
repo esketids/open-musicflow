@@ -442,11 +442,106 @@ ${ok ? '<script>setTimeout(() => { window.close(); }, 1500);</script>' : ''}
     res.json({ ok: true, spotify: state, soundbar: soundbarClient.state });
   });
 
-  app.post('/api/spotify/toggle', async (_req, res) => {
-    const state = await spotifyService.togglePlayPause();
+  app.post('/api/volume/up', (_req, res) => {
+    soundbarClient.volumeUp();
+    res.json({ ok: true, state: soundbarClient.state });
+  });
+
+  app.post('/api/volume/down', (_req, res) => {
+    soundbarClient.volumeDown();
+    res.json({ ok: true, state: soundbarClient.state });
+  });
+
+  const handlePlaybackControl = async (
+    params: {
+      action?: string;
+      playctrl?: number;
+      repeat?: number;
+      shuffle?: boolean;
+      time?: number;
+    },
+    res: express.Response
+  ) => {
+    const state = await spotifyService.controlPlayback(params);
     broadcast('spotify', state);
     broadcast('state', soundbarClient.state);
     res.json({ ok: true, spotify: state, soundbar: soundbarClient.state });
+  };
+
+  app.post('/api/spotify/toggle', async (req, res) => {
+    const body = req.body || {};
+    await handlePlaybackControl(
+      {
+        action: typeof body.action === 'string' ? body.action : 'toggle',
+        playctrl: typeof body.playctrl === 'number' ? body.playctrl : undefined,
+        repeat: typeof body.repeat === 'number' ? body.repeat : undefined,
+        shuffle: typeof body.shuffle === 'boolean' ? body.shuffle : undefined,
+        time: typeof body.time === 'number' ? body.time : undefined,
+      },
+      res
+    );
+  });
+
+  app.post('/api/spotify/control', async (req, res) => {
+    const body = req.body || {};
+    await handlePlaybackControl(
+      {
+        action: typeof body.action === 'string' ? body.action : undefined,
+        playctrl: typeof body.playctrl === 'number' ? body.playctrl : undefined,
+        repeat: typeof body.repeat === 'number' ? body.repeat : undefined,
+        shuffle: typeof body.shuffle === 'boolean' ? body.shuffle : undefined,
+        time: typeof body.time === 'number' ? body.time : undefined,
+      },
+      res
+    );
+  });
+
+  app.post('/api/play-cmd', async (req, res) => {
+    const body = req.body || {};
+    await handlePlaybackControl(
+      {
+        action: typeof body.action === 'string' ? body.action : undefined,
+        playctrl: typeof body.playctrl === 'number' ? body.playctrl : undefined,
+        repeat: typeof body.repeat === 'number' ? body.repeat : undefined,
+        shuffle: typeof body.shuffle === 'boolean' ? body.shuffle : undefined,
+        time: typeof body.time === 'number' ? body.time : undefined,
+      },
+      res
+    );
+  });
+
+  app.post('/api/spotify/pause', async (_req, res) => {
+    await handlePlaybackControl({ action: 'pause' }, res);
+  });
+
+  app.post('/api/spotify/stop', async (_req, res) => {
+    await handlePlaybackControl({ action: 'stop' }, res);
+  });
+
+  app.post('/api/spotify/next', async (_req, res) => {
+    await handlePlaybackControl({ action: 'next' }, res);
+  });
+
+  app.post('/api/spotify/prev', async (_req, res) => {
+    await handlePlaybackControl({ action: 'previous' }, res);
+  });
+
+  app.post('/api/spotify/previous', async (_req, res) => {
+    await handlePlaybackControl({ action: 'previous' }, res);
+  });
+
+  app.post('/api/playback/:action', async (req, res) => {
+    const body = req.body || {};
+    await handlePlaybackControl(
+      {
+        action: String(req.params.action || 'toggle'),
+        playctrl: typeof body.playctrl === 'number' ? body.playctrl : undefined,
+        repeat: typeof body.repeat === 'number' ? body.repeat : undefined,
+        shuffle: typeof body.shuffle === 'boolean' ? body.shuffle : undefined,
+        time: typeof body.time === 'number' ? body.time : undefined,
+      },
+      res
+    );
   });
 
   // === Local Media Library & HTTP/DLNA Audio Streaming (:4741 and :49252) ===

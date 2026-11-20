@@ -12,6 +12,11 @@ import {
   RefreshCw,
   Play,
   Pause,
+  Square,
+  SkipBack,
+  SkipForward,
+  Shuffle,
+  Repeat,
   Plus,
   Trash2,
   CheckCircle2,
@@ -21,6 +26,10 @@ import {
   PackageCheck,
   Wifi,
   ShieldCheck,
+  Minus,
+  Music,
+  LayoutGrid,
+  Smartphone,
 } from 'lucide-react';
 import {
   EncryptionMode,
@@ -34,16 +43,36 @@ import {
 } from './shared/protocolTypes';
 
 type NavTab = 'audio' | 'alarms' | 'spotify' | 'media' | 'sj8setup' | 'mesh' | 'inspector';
+type UiMode = 'simple' | 'studio';
+type SimpleTab = 'now_playing' | 'speakers' | 'sound' | 'alarms';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export default function App() {
+  const [uiMode, setUiMode] = useState<UiMode>(() => {
+    try {
+      const saved = window.localStorage.getItem('open_musicflow_ui_mode');
+      return saved === 'simple' ? 'simple' : 'studio';
+    } catch {
+      return 'studio';
+    }
+  });
+  const [simpleTab, setSimpleTab] = useState<SimpleTab>('now_playing');
   const [activeTab, setActiveTab] = useState<NavTab>('audio');
   const [soundbar, setSoundbar] = useState<SoundbarState | null>(null);
   const [spotify, setSpotify] = useState<SpotifyLinkState | null>(null);
   const [tracks, setTracks] = useState<LocalMediaTrack[]>([]);
   const [packetLogs, setPacketLogs] = useState<PacketLogEntry[]>([]);
   const [statusBanner, setStatusBanner] = useState<string>('');
+
+  const switchUiMode = (mode: UiMode) => {
+    setUiMode(mode);
+    try {
+      window.localStorage.setItem('open_musicflow_ui_mode', mode);
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+  };
 
   // Connection Bar Form State
   const [hostInput, setHostInput] = useState<string>('127.0.0.1');
@@ -102,35 +131,53 @@ export default function App() {
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProto}//${window.location.host}/ws`;
-    const ws = new WebSocket(wsUrl);
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'init') {
-          setSoundbar(msg.data.soundbar);
-          setSpotify(msg.data.spotify);
-          setTracks(msg.data.tracks || []);
-          setPacketLogs(msg.data.packetLogs || []);
-          if (msg.data.soundbar?.host) setHostInput(msg.data.soundbar.host);
-          if (msg.data.soundbar?.port) setPortInput(msg.data.soundbar.port);
-          if (msg.data.soundbar?.encryption) setEncryptionInput(msg.data.soundbar.encryption);
-        } else if (msg.type === 'state') {
-          setSoundbar(msg.data);
-        } else if (msg.type === 'spotify') {
-          setSpotify(msg.data);
-        } else if (msg.type === 'packet') {
-          setPacketLogs((prev) => [msg.data, ...prev.slice(0, 149)]);
-        } else if (msg.type === 'alarmTriggered') {
-          showToast(`Wi-Fi Alarm Triggered: "${msg.data.title}" (Vol ${msg.data.volume})`);
+    const connectWs = () => {
+      if (disposed) return;
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'init') {
+            setSoundbar(msg.data.soundbar);
+            setSpotify(msg.data.spotify);
+            setTracks(msg.data.tracks || []);
+            setPacketLogs(msg.data.packetLogs || []);
+            if (msg.data.soundbar?.host) setHostInput(msg.data.soundbar.host);
+            if (msg.data.soundbar?.port) setPortInput(msg.data.soundbar.port);
+            if (msg.data.soundbar?.encryption) setEncryptionInput(msg.data.soundbar.encryption);
+          } else if (msg.type === 'state') {
+            setSoundbar(msg.data);
+          } else if (msg.type === 'spotify') {
+            setSpotify(msg.data);
+          } else if (msg.type === 'packet') {
+            setPacketLogs((prev) => [msg.data, ...prev.slice(0, 149)]);
+          } else if (msg.type === 'alarmTriggered') {
+            showToast(`Wi-Fi Alarm Triggered: "${msg.data.title}" (Vol ${msg.data.volume})`);
+          }
+        } catch {
+          // Ignore malformed frame
         }
-      } catch {
-        // Ignore malformed frame
-      }
+      };
+      ws.onclose = () => {
+        if (!disposed) {
+          reconnectTimer = setTimeout(connectWs, 2000);
+        }
+      };
+      ws.onerror = () => {
+        ws?.close();
+      };
     };
 
+    connectWs();
+
     return () => {
-      ws.close();
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
     };
   }, []);
 
@@ -209,6 +256,39 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ muted: nextMute }),
     });
+  };
+
+  const stepVolume = async (direction: 'up' | 'down') => {
+    if (!soundbar) return;
+    const delta = direction === 'up' ? 1 : -1;
+    const nextVol = Math.max(0, Math.min(soundbar.maxVolume || 100, soundbar.volume + delta));
+    setSoundbar({ ...soundbar, volume: nextVol });
+    const res = await fetch(`/api/volume/${direction}`, { method: 'POST' });
+    const data = await res.json().catch(() => null);
+    if (data?.ok && data.soundbar) setSoundbar(data.soundbar);
+  };
+
+  const handlePlaybackAction = async (
+    action: 'toggle' | 'play' | 'pause' | 'stop' | 'previous' | 'next' | 'shuffle' | 'repeat'
+  ) => {
+    const endpoint =
+      action === 'toggle'
+        ? '/api/spotify/toggle'
+        : action === 'pause'
+          ? '/api/spotify/pause'
+          : action === 'stop'
+            ? '/api/spotify/stop'
+            : '/api/spotify/control';
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json().catch(() => null);
+    if (data?.ok) {
+      if (data.spotify) setSpotify(data.spotify);
+      if (data.soundbar) setSoundbar(data.soundbar);
+    }
   };
 
   const selectFunction = async (funcId: number) => {
@@ -501,6 +581,587 @@ export default function App() {
 
   const previewBitmask = alarmDays.reduce((acc, d) => acc | (1 << (6 - d)), 0);
 
+  const modeSwitcher = (
+    <div className="mode-switcher" role="group" aria-label="Interface Mode">
+      <button
+        id="btn-mode-simple"
+        className={`mode-switcher-btn ${uiMode === 'simple' ? 'active' : ''}`}
+        onClick={() => switchUiMode('simple')}
+        title="Simple LG Music Flow-style remote interface"
+      >
+        <Smartphone size={13} />
+        Simple
+      </button>
+      <button
+        id="btn-mode-studio"
+        className={`mode-switcher-btn ${uiMode === 'studio' ? 'active' : ''}`}
+        onClick={() => switchUiMode('studio')}
+        title="Full Open MusicFlow Studio console"
+      >
+        <LayoutGrid size={13} />
+        Studio
+      </button>
+    </div>
+  );
+
+  if (uiMode === 'simple') {
+    const simpleFunctions = LG_INPUT_FUNCTIONS.filter((f) => availFuncs.includes(f.id));
+    const simpleEqs = LG_EQ_PRESETS.filter((e) => availEqs.includes(e.id));
+    const isPlaying = soundbar.playInfo.playing;
+
+    return (
+      <div className="mf-shell">
+        {/* LG Music Flow Inspired Crimson Top App Bar */}
+        <header className="mf-appbar">
+          <div className="mf-appbar-left">
+            <div className="mf-appbar-logo">
+              <Speaker size={20} />
+            </div>
+            <div>
+              <div className="mf-appbar-title">Music Flow</div>
+              <div className="mf-appbar-sub">
+                <span
+                  className={`status-dot ${soundbar.connected ? 'online' : 'offline'}`}
+                  style={{ width: 7, height: 7 }}
+                />
+                <span>{soundbar.petName || 'LG SJ8'}</span>
+                <span>•</span>
+                <span>
+                  {soundbar.connected
+                    ? soundbar.isSimulator
+                      ? 'Demo Speaker'
+                      : 'Connected'
+                    : 'Offline'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mf-appbar-right">
+            {modeSwitcher}
+            <button
+              id="btn-simple-refresh"
+              className="btn"
+              style={{
+                background: 'rgba(255,255,255,0.14)',
+                borderColor: 'rgba(255,255,255,0.28)',
+                color: '#ffffff',
+              }}
+              onClick={() => fetch('/api/refresh', { method: 'POST' })}
+              title="Refresh speaker status"
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
+        </header>
+
+        {/* Classic LG Music Flow Tab Strip */}
+        <nav className="mf-tabbar" aria-label="Music Flow Navigation">
+          <button
+            id="mf-tab-now-playing"
+            className={`mf-tab ${simpleTab === 'now_playing' ? 'active' : ''}`}
+            onClick={() => setSimpleTab('now_playing')}
+          >
+            <Music size={15} />
+            Now Playing
+          </button>
+          <button
+            id="mf-tab-speakers"
+            className={`mf-tab ${simpleTab === 'speakers' ? 'active' : ''}`}
+            onClick={() => setSimpleTab('speakers')}
+          >
+            <Speaker size={15} />
+            Speakers &amp; Inputs
+          </button>
+          <button
+            id="mf-tab-sound"
+            className={`mf-tab ${simpleTab === 'sound' ? 'active' : ''}`}
+            onClick={() => setSimpleTab('sound')}
+          >
+            <Sliders size={15} />
+            Sound &amp; EQ
+          </button>
+          <button
+            id="mf-tab-alarms"
+            className={`mf-tab ${simpleTab === 'alarms' ? 'active' : ''}`}
+            onClick={() => setSimpleTab('alarms')}
+          >
+            <Bell size={15} />
+            Alarms
+          </button>
+        </nav>
+
+        {/* Main Centered Content */}
+        <main className="mf-content">
+          {statusBanner && (
+            <div
+              className="mf-card"
+              style={{
+                padding: '10px 16px',
+                borderColor: 'rgba(227, 24, 55, 0.45)',
+                background: 'rgba(227, 24, 55, 0.14)',
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <CheckCircle2 size={15} color="#ff4d6a" />
+              <span>{statusBanner}</span>
+            </div>
+          )}
+
+          {simpleTab === 'now_playing' && (
+            <>
+              <section className="mf-card mf-now-playing">
+                <div className={`mf-artwork ${isPlaying ? 'playing' : ''}`}>
+                  <Disc size={54} />
+                  <span className="mf-source-tag">
+                    {soundbar.playInfo.sourceApp || activeInputDef.label}
+                  </span>
+                </div>
+
+                <div>
+                  <div className="mf-track-title">
+                    {soundbar.playInfo.title || activeInputDef.label}
+                  </div>
+                  <div className="mf-track-sub">
+                    {soundbar.playInfo.artist ||
+                      (isPlaying ? 'Playing on LG SJ8' : 'Paused • Ready to play')}
+                  </div>
+                </div>
+
+                <div className="mf-transport">
+                  <button
+                    id="mf-btn-shuffle"
+                    className={`mf-icon-btn ${soundbar.playInfo.shuffle ? 'active' : ''}`}
+                    onClick={() => handlePlaybackAction('shuffle')}
+                    title="Shuffle"
+                  >
+                    <Shuffle size={17} />
+                  </button>
+                  <button
+                    id="mf-btn-prev"
+                    className="mf-icon-btn"
+                    onClick={() => handlePlaybackAction('previous')}
+                    title="Previous Track"
+                  >
+                    <SkipBack size={18} />
+                  </button>
+                  <button
+                    id="mf-btn-play-toggle"
+                    className="mf-play-fab"
+                    onClick={() => handlePlaybackAction('toggle')}
+                    title={isPlaying ? 'Pause' : 'Play'}
+                  >
+                    {isPlaying ? <Pause size={28} /> : <Play size={28} style={{ marginLeft: 3 }} />}
+                  </button>
+                  <button
+                    id="mf-btn-next"
+                    className="mf-icon-btn"
+                    onClick={() => handlePlaybackAction('next')}
+                    title="Next Track"
+                  >
+                    <SkipForward size={18} />
+                  </button>
+                  <button
+                    id="mf-btn-repeat"
+                    className={`mf-icon-btn ${soundbar.playInfo.repeat > 0 ? 'active' : ''}`}
+                    onClick={() => handlePlaybackAction('repeat')}
+                    title="Repeat"
+                  >
+                    <Repeat size={17} />
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button
+                    id="mf-btn-pause"
+                    className="btn"
+                    onClick={() => handlePlaybackAction('pause')}
+                  >
+                    <Pause size={13} />
+                    Pause
+                  </button>
+                  <button
+                    id="mf-btn-stop"
+                    className="btn"
+                    onClick={() => handlePlaybackAction('stop')}
+                  >
+                    <Square size={13} />
+                    Stop
+                  </button>
+                  <button
+                    id="mf-btn-spotify-quick"
+                    className="btn btn-spotify"
+                    onClick={() =>
+                      handleSpotifyPlayUri(
+                        customSpotifyUri,
+                        spotify?.currentTrack?.title || 'Spotify Connect'
+                      )
+                    }
+                  >
+                    <Disc size={14} />
+                    Play on Spotify
+                  </button>
+                </div>
+              </section>
+
+              {tracks.length > 0 && (
+                <section className="mf-card">
+                  <div className="mf-card-title">
+                    <span>My Music</span>
+                    <span style={{ fontSize: 12, color: '#9ba3b2', fontWeight: 500 }}>
+                      Tap to stream to {soundbar.petName}
+                    </span>
+                  </div>
+                  <div className="mf-list">
+                    {tracks.slice(0, 5).map((t) => (
+                      <div key={t.id} className="mf-list-row">
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t.title}</div>
+                          <div style={{ fontSize: 12, color: '#9ba3b2' }}>
+                            {t.artist} • {t.format.toUpperCase()}
+                          </div>
+                        </div>
+                        <button
+                          className="btn"
+                          onClick={() => handlePlayLocalTrack(t)}
+                          title={`Play ${t.title}`}
+                        >
+                          <Play size={13} />
+                          Play
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
+
+          {simpleTab === 'speakers' && (
+            <>
+              <section className="mf-card">
+                <div className="mf-card-title">
+                  <span>Active Speaker</span>
+                  <span style={{ fontSize: 12, color: '#9ba3b2', fontWeight: 500 }}>
+                    {activeInputDef.label} • {activeEqPreset.label}
+                  </span>
+                </div>
+                <div className="mf-list-row active" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div
+                        style={{
+                          width: 42,
+                          height: 42,
+                          borderRadius: 10,
+                          background: 'rgba(227, 24, 55, 0.2)',
+                          color: '#ff4d6a',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Speaker size={22} />
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{soundbar.petName || 'LG SJ8'}</div>
+                        <div style={{ fontSize: 12, color: '#9ba3b2' }}>
+                          {soundbar.connected
+                            ? soundbar.isSimulator
+                              ? 'Demo Mode (Built-in Simulator)'
+                              : `Connected on Wi-Fi (${soundbar.host})`
+                            : 'Not connected'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      className={`btn ${soundbar.muted ? 'btn-danger' : ''}`}
+                      onClick={toggleMute}
+                    >
+                      {soundbar.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+                      {soundbar.muted ? 'Muted' : `${soundbar.volume}%`}
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button className="mf-icon-btn" style={{ width: 34, height: 34 }} onClick={() => stepVolume('down')} title="Volume Down">
+                      <Minus size={15} />
+                    </button>
+                    <input
+                      type="range"
+                      className="mf-slider"
+                      min={0}
+                      max={soundbar.maxVolume || 100}
+                      value={soundbar.volume}
+                      onChange={(e) => setVolume(Number(e.target.value))}
+                    />
+                    <button className="mf-icon-btn" style={{ width: 34, height: 34 }} onClick={() => stepVolume('up')} title="Volume Up">
+                      <Plus size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn"
+                    onClick={() => connectToEndpoint('192.168.0.10', 9741, 'musicflow', 'sj8_v1')}
+                  >
+                    <Wifi size={14} />
+                    Connect LG SJ8
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => connectToEndpoint('127.0.0.1', 19741, 'auto', 'sj8_v1')}
+                  >
+                    <Zap size={14} />
+                    Demo Speaker
+                  </button>
+                </div>
+              </section>
+
+              <section className="mf-card">
+                <div className="mf-card-title">
+                  <span>Input Source</span>
+                  <span style={{ fontSize: 12, color: '#9ba3b2', fontWeight: 500 }}>
+                    Current: {activeInputDef.label}
+                  </span>
+                </div>
+                <div className="mf-chip-grid">
+                  {simpleFunctions.map((fn) => (
+                    <button
+                      key={fn.id}
+                      className={`mf-chip ${soundbar.currentFunction === fn.id ? 'active' : ''}`}
+                      onClick={() => selectFunction(fn.id)}
+                    >
+                      {fn.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+
+          {simpleTab === 'sound' && (
+            <>
+              <section className="mf-card">
+                <div className="mf-card-title">
+                  <span>Sound Effect</span>
+                  <span style={{ fontSize: 12, color: '#9ba3b2', fontWeight: 500 }}>
+                    {activeEqPreset.label}
+                  </span>
+                </div>
+                <div className="mf-chip-grid">
+                  {simpleEqs.map((eq) => (
+                    <button
+                      key={eq.id}
+                      className={`mf-chip ${soundbar.currentEq === eq.id ? 'active' : ''}`}
+                      onClick={() => selectEq(eq.id)}
+                    >
+                      {eq.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="mf-card">
+                <div className="mf-card-title">
+                  <span>Subwoofer &amp; Tone</span>
+                </div>
+                <div className="mf-list">
+                  <div className="mf-list-row" style={{ gap: 16 }}>
+                    <span style={{ minWidth: 92, fontWeight: 600, fontSize: 13.5 }}>Subwoofer</span>
+                    <input
+                      type="range"
+                      className="mf-slider"
+                      min={soundbar.wooferMin}
+                      max={soundbar.wooferMax}
+                      value={soundbar.wooferLevel}
+                      onChange={(e) => updateSetting({ wooferLevel: Number(e.target.value) })}
+                    />
+                    <span style={{ minWidth: 52, textAlign: 'right', fontWeight: 600 }}>
+                      {soundbar.wooferLevel > 0 ? `+${soundbar.wooferLevel}` : soundbar.wooferLevel} dB
+                    </span>
+                  </div>
+                  <div className="mf-list-row" style={{ gap: 16 }}>
+                    <span style={{ minWidth: 92, fontWeight: 600, fontSize: 13.5 }}>Bass</span>
+                    <input
+                      type="range"
+                      className="mf-slider"
+                      min={-6}
+                      max={6}
+                      value={soundbar.bass}
+                      onChange={(e) => updateTone({ bass: Number(e.target.value) })}
+                    />
+                    <span style={{ minWidth: 52, textAlign: 'right', fontWeight: 600 }}>
+                      {soundbar.bass > 0 ? `+${soundbar.bass}` : soundbar.bass}
+                    </span>
+                  </div>
+                  <div className="mf-list-row" style={{ gap: 16 }}>
+                    <span style={{ minWidth: 92, fontWeight: 600, fontSize: 13.5 }}>Treble</span>
+                    <input
+                      type="range"
+                      className="mf-slider"
+                      min={-6}
+                      max={6}
+                      value={soundbar.treble}
+                      onChange={(e) => updateTone({ treble: Number(e.target.value) })}
+                    />
+                    <span style={{ minWidth: 52, textAlign: 'right', fontWeight: 600 }}>
+                      {soundbar.treble > 0 ? `+${soundbar.treble}` : soundbar.treble}
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="mf-card">
+                <div className="mf-card-title">
+                  <span>Soundbar Options</span>
+                </div>
+                <div className="mf-list">
+                  {[
+                    { key: 'nightMode', label: 'Night Mode', sub: 'Softer loud peaks for late listening', val: soundbar.nightMode },
+                    { key: 'autoVolume', label: 'Auto Volume', sub: 'Keep volume consistent across sources', val: soundbar.autoVolume },
+                    { key: 'ledIndicator', label: 'Front LED Display', sub: 'Show status lights on the soundbar', val: soundbar.ledIndicator },
+                    { key: 'btStandby', label: 'Bluetooth Standby', sub: 'Wake speaker when Bluetooth connects', val: soundbar.btStandby },
+                    { key: 'rearEnabled', label: 'Rear Surround Speakers', sub: 'Enable wireless rear surround output', val: soundbar.rearEnabled },
+                  ].map((opt) => (
+                    <div key={opt.key} className="mf-list-row">
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13.5 }}>{opt.label}</div>
+                        <div style={{ fontSize: 12, color: '#9ba3b2' }}>{opt.sub}</div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={opt.val}
+                        className={`mf-switch ${opt.val ? 'on' : ''}`}
+                        onClick={() => updateSetting({ [opt.key]: !opt.val })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+
+          {simpleTab === 'alarms' && (
+            <section className="mf-card">
+              <div className="mf-card-title">
+                <span>Alarms</span>
+                <button
+                  className="btn"
+                  style={{ fontSize: 12, padding: '5px 10px' }}
+                  onClick={() => {
+                    setActiveTab('alarms');
+                    switchUiMode('studio');
+                  }}
+                >
+                  <Plus size={13} />
+                  Add / Edit in Studio
+                </button>
+              </div>
+              {soundbar.alarms.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '24px 0', color: '#9ba3b2' }}>
+                  No alarms set yet. Switch to Studio to create a wake-up alarm.
+                </div>
+              ) : (
+                <div className="mf-list">
+                  {soundbar.alarms.map((alarm) => (
+                    <div key={alarm.id} className="mf-list-row">
+                      <div>
+                        <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700 }}>
+                          {String(alarm.hour).padStart(2, '0')}:{String(alarm.minute).padStart(2, '0')}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{alarm.title}</div>
+                        <div style={{ fontSize: 12, color: '#9ba3b2' }}>
+                          Vol {alarm.volume} •{' '}
+                          {alarm.daysList.length === 7
+                            ? 'Every day'
+                            : alarm.daysList.map((d) => DAY_NAMES[d]).join(', ') || 'Once'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={alarm.enable}
+                        className={`mf-switch ${alarm.enable ? 'on' : ''}`}
+                        onClick={() => handleToggleAlarm(alarm.id, !alarm.enable)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+        </main>
+
+        {/* Persistent Bottom Mini-Player & Volume Dock (LG Music Flow Style) */}
+        <footer className="mf-bottom-dock">
+          <div className="mf-bottom-dock-inner">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
+              <button
+                className="mf-icon-btn"
+                style={{
+                  width: 38,
+                  height: 38,
+                  background: '#e31837',
+                  borderColor: '#e31837',
+                  color: '#ffffff',
+                }}
+                onClick={() => handlePlaybackAction('toggle')}
+                title={isPlaying ? 'Pause' : 'Play'}
+              >
+                {isPlaying ? <Pause size={16} /> : <Play size={16} style={{ marginLeft: 2 }} />}
+              </button>
+              <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {soundbar.playInfo.title || activeInputDef.label}
+                </div>
+                <div style={{ fontSize: 11.5, color: '#9ba3b2' }}>
+                  {soundbar.petName || 'LG SJ8'} • {isPlaying ? 'Playing' : 'Paused'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 240px' }}>
+              <button
+                className="mf-icon-btn"
+                style={{ width: 34, height: 34 }}
+                onClick={toggleMute}
+                title={soundbar.muted ? 'Unmute' : 'Mute'}
+              >
+                {soundbar.muted ? <VolumeX size={15} color="#ff4d6a" /> : <Volume2 size={15} />}
+              </button>
+              <input
+                type="range"
+                className="mf-slider"
+                min={0}
+                max={soundbar.maxVolume || 100}
+                value={soundbar.volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                aria-label="Master Volume"
+              />
+              <span style={{ minWidth: 32, textAlign: 'right', fontWeight: 700, fontSize: 13 }}>
+                {soundbar.volume}
+              </span>
+            </div>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
   return (
     <div className="studio-shell">
       {/* Top Hardware Console Bar */}
@@ -522,6 +1183,7 @@ export default function App() {
         </div>
 
         <div className="connection-strip">
+          {modeSwitcher}
           <div className="status-indicator" id="connection-status-pill">
             <span className={`status-dot ${soundbar.connected ? 'online' : 'offline'}`} />
             <span>
@@ -1964,7 +2626,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-macos-universal.zip"
+                        href="/releases/open-musicflow-v1.1.0-macos-universal.zip"
                         download
                       >
                         Download macOS (.zip)
@@ -1972,7 +2634,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-macos-universal.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-macos-universal.tar.gz"
                         download
                       >
                         .tar.gz
@@ -1993,7 +2655,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-linux-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-linux-x64.tar.gz"
                         download
                       >
                         Download Linux (.tar.gz)
@@ -2001,7 +2663,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-linux-x64.zip"
+                        href="/releases/open-musicflow-v1.1.0-linux-x64.zip"
                         download
                       >
                         .zip
@@ -2021,7 +2683,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-windows-x64.zip"
+                        href="/releases/open-musicflow-v1.1.0-windows-x64.zip"
                         download
                       >
                         Download Windows (.zip)
@@ -2029,7 +2691,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-windows-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-windows-x64.tar.gz"
                         download
                       >
                         .tar.gz
@@ -2266,7 +2928,26 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
               </span>
               <span>EQ: {activeEqPreset.label}</span>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                id="btn-rack-prev"
+                className="btn"
+                title="Previous Track (PLAY_CMD playctrl=3)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'previous' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <SkipBack size={14} />
+              </button>
               <button
                 id="btn-rack-play-pause"
                 className="btn btn-primary"
@@ -2288,6 +2969,101 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                 {(soundbar.connected ? soundbar.playInfo.playing : spotify?.isPlaying)
                   ? 'Pause Stream'
                   : 'Resume Stream'}
+              </button>
+              <button
+                id="btn-rack-next"
+                className="btn"
+                title="Next Track (PLAY_CMD playctrl=5)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'next' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <SkipForward size={14} />
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                id="btn-rack-pause-explicit"
+                className="btn"
+                style={{ flex: 1, fontSize: 11.5, padding: '4px 6px' }}
+                title="Send explicit PAUSE (PLAY_CMD playctrl=1)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/pause', { method: 'POST' });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Pause size={12} />
+                Pause
+              </button>
+              <button
+                id="btn-rack-stop"
+                className="btn"
+                style={{ flex: 1, fontSize: 11.5, padding: '4px 6px' }}
+                title="Stop Playback (PLAY_CMD playctrl=2)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/stop', { method: 'POST' });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Square size={12} />
+                Stop
+              </button>
+              <button
+                id="btn-rack-shuffle"
+                className={`btn ${soundbar.playInfo.shuffle ? 'btn-spotify' : ''}`}
+                style={{ fontSize: 11.5, padding: '4px 8px' }}
+                title="Toggle Shuffle (PLAY_CMD playctrl=8)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'shuffle' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Shuffle size={12} />
+              </button>
+              <button
+                id="btn-rack-repeat"
+                className={`btn ${soundbar.playInfo.repeat > 0 ? 'btn-spotify' : ''}`}
+                style={{ fontSize: 11.5, padding: '4px 8px' }}
+                title={`Cycle Repeat (PLAY_CMD playctrl=7, mode=${soundbar.playInfo.repeat})`}
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'repeat' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Repeat size={12} />
               </button>
             </div>
           </div>

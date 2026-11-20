@@ -304,6 +304,9 @@ export class LgSoundbarClient extends EventEmitter {
     this.sendRawPacket({ data: { func: 15 }, msg: 'FUNC_NAME_REQ' });
     this.sendRawPacket({ msg: 'EQ_INFO_REQ' });
     this.sendRawPacket({ msg: 'ALARM_LIST_REQ' });
+    this.sendRawPacket({ msg: 'SLEEP_INFO_REQ' });
+    this.sendRawPacket({ msg: 'NETWORK_INFO_REQ' });
+    this.sendRawPacket({ msg: 'CP_INFO_REQ' });
 
     // 2. If in auto or temescal mode, also query V2 views
     if (this.state.dialect !== 'musicflow') {
@@ -372,10 +375,10 @@ export class LgSoundbarClient extends EventEmitter {
       this.state.registered = true;
       this.sendRawPacket({
         msg: 'SPK_ADD_SET',
-        data: { name: params.speakerName },
+        data: { icon: 0, name: params.speakerName },
       });
       this.emitState();
-      return { msg: 'SPK_ADD_SET', result: 'OK', data: { name: params.speakerName, reg: true } };
+      return { msg: 'SPK_ADD_SET', result: 'OK', data: { icon: 0, name: params.speakerName, reg: true } };
     }
 
     return this.sendOneShotCommand(
@@ -383,7 +386,7 @@ export class LgSoundbarClient extends EventEmitter {
       port,
       {
         msg: 'SPK_ADD_SET',
-        data: { name: params.speakerName },
+        data: { icon: 0, name: params.speakerName },
       },
       'sj8_v1'
     );
@@ -459,6 +462,20 @@ export class LgSoundbarClient extends EventEmitter {
     }
   }
 
+  public volumeUp(): void {
+    const next = Math.min(this.state.maxVolume || 40, this.state.volume + 1);
+    this.state.volume = next;
+    this.sendRawPacket({ msg: 'VOLUME_UP' });
+    this.emitState();
+  }
+
+  public volumeDown(): void {
+    const next = Math.max(0, this.state.volume - 1);
+    this.state.volume = next;
+    this.sendRawPacket({ msg: 'VOLUME_DOWN' });
+    this.emitState();
+  }
+
   public setMute(muted: boolean): void {
     this.state.muted = muted;
     this.emitState();
@@ -479,20 +496,55 @@ export class LgSoundbarClient extends EventEmitter {
     }
   }
 
-  /** Sends LG Music Flow PLAY_CMD (`playctrl`: 0=PLAY, 1=PAUSE, 2=STOP, 3=PREV, 5=NEXT). */
-  public sendPlayCommand(playctrl: 0 | 1 | 2 | 3 | 5): void {
+  /**
+   * Sends LG Music Flow PLAY_CMD (`PlayCmdRequest$Data` from MusicFlow_v1.9.94.apk).
+   * `playctrl`: 0=PLAY, 1=PAUSE, 2=STOP, 3=PREV_SKIP, 4=PREV_SCAN, 5=NEXT_SKIP, 6=NEXT_SCAN, 7=REPEAT, 8=SHUFFLE.
+   */
+  public sendPlayCommand(
+    playctrl: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8,
+    options?: { repeat?: number; shuffle?: boolean }
+  ): void {
     if (playctrl === 0) this.state.playInfo.playing = true;
     else if (playctrl === 1 || playctrl === 2) this.state.playInfo.playing = false;
 
-    const shuffle = Boolean(this.state.playInfo.shuffle);
+    const repeat =
+      typeof options?.repeat === 'number'
+        ? Math.max(0, Math.min(2, Math.round(options.repeat)))
+        : playctrl === 7
+          ? ((this.state.playInfo.repeat ?? 0) + 1) % 3
+          : (this.state.playInfo.repeat ?? 0);
+    const shuffle =
+      typeof options?.shuffle === 'boolean'
+        ? options.shuffle
+        : playctrl === 8
+          ? !Boolean(this.state.playInfo.shuffle)
+          : Boolean(this.state.playInfo.shuffle);
+
+    if (playctrl === 7 || typeof options?.repeat === 'number') {
+      this.state.playInfo.repeat = repeat;
+    }
+    if (playctrl === 8 || typeof options?.shuffle === 'boolean') {
+      this.state.playInfo.shuffle = shuffle;
+    }
+
     this.sendRawPacket({
       msg: 'PLAY_CMD',
       data: {
         playctrl,
-        repeat: this.state.playInfo.repeat ?? 0,
+        repeat,
         shuffle,
-        suffle: shuffle,
       },
+    });
+    this.emitState();
+  }
+
+  /** Sends LG Music Flow LOCAL_TIME_SEARCH (`LocalTimeSearchRequest$Data`) to seek in seconds. */
+  public sendSeekCommand(timeSec: number): void {
+    const clamped = Math.max(0, Math.round(timeSec));
+    this.state.playInfo.positionSec = clamped;
+    this.sendRawPacket({
+      msg: 'LOCAL_TIME_SEARCH',
+      data: { time: clamped },
     });
     this.emitState();
   }
@@ -593,6 +645,7 @@ export class LgSoundbarClient extends EventEmitter {
     if (typeof partial.rearEnabled === 'boolean') {
       this.state.rearEnabled = partial.rearEnabled;
       v2Data.b_rear = partial.rearEnabled;
+      this.sendRawPacket({ msg: 'ON_SURROUND_SET', data: { rearboxon: partial.rearEnabled } });
     }
     if (typeof partial.rearLevel === 'number') {
       this.state.rearLevel = partial.rearLevel;
@@ -625,7 +678,10 @@ export class LgSoundbarClient extends EventEmitter {
     if (typeof partial.btStandby === 'boolean') {
       this.state.btStandby = partial.btStandby;
       v2Data.b_bt_standby = partial.btStandby;
-      this.sendRawPacket({ msg: 'BT_STANDBY_SET', data: { btstandby: partial.btStandby } });
+      this.sendRawPacket({
+        msg: 'BT_STANDBY_SET',
+        data: { on: partial.btStandby, btstandby: partial.btStandby },
+      });
     }
     if (typeof partial.btRestrict === 'boolean') {
       this.state.btRestrict = partial.btRestrict;
@@ -634,7 +690,10 @@ export class LgSoundbarClient extends EventEmitter {
     }
     if (typeof partial.ledIndicator === 'boolean') {
       this.state.ledIndicator = partial.ledIndicator;
-      this.sendRawPacket({ msg: 'LED_SET', data: { ledset: partial.ledIndicator } });
+      this.sendRawPacket({
+        msg: 'LED_SET',
+        data: { stat: partial.ledIndicator, ledset: partial.ledIndicator },
+      });
     }
     if (typeof partial.sleepTimerMinutes === 'number') {
       this.state.sleepTimerMinutes = partial.sleepTimerMinutes;
@@ -712,7 +771,7 @@ export class LgSoundbarClient extends EventEmitter {
     this.sendRawPacket({
       msg: 'ALARM_SET',
       data: {
-        id: existingId,
+        id: assignedId,
         modifiedid: assignedId,
         mode: 0,
         day: bitmask,
@@ -957,6 +1016,7 @@ export class LgSoundbarClient extends EventEmitter {
         if (typeof info.vol === 'number' && info.vol <= 40) this.state.volume = info.vol;
         if (typeof info.mute === 'boolean') this.state.muted = info.mute;
         if (typeof info.function === 'number') this.state.currentFunction = info.function;
+        if (typeof info.playing === 'boolean') this.state.playInfo.playing = info.playing;
         if (Array.isArray(info.eqlist)) {
           this.state.availableEqs = info.eqlist.map(Number);
         }
@@ -998,12 +1058,19 @@ export class LgSoundbarClient extends EventEmitter {
         break;
       }
 
-      case 'VOLUME_CHANGE': {
+      case 'SPK_NAME_CHANGE': {
+        if (typeof data.name === 'string' && data.name) this.state.name = data.name;
+        break;
+      }
+
+      case 'VOLUME_CHANGE':
+      case 'VOLUME_SETTING': {
         if (typeof data.vol === 'number') this.state.volume = data.vol;
         break;
       }
 
-      case 'MUTE_CHANGE': {
+      case 'MUTE_CHANGE':
+      case 'MUTE_SET': {
         if (typeof data.mute === 'boolean') this.state.muted = data.mute;
         break;
       }
@@ -1074,6 +1141,8 @@ export class LgSoundbarClient extends EventEmitter {
         if (typeof data.nightmode === 'boolean') this.state.nightMode = data.nightmode;
         if (typeof data.autovol === 'boolean') this.state.autoVolume = data.autovol;
         if (typeof data.autopower === 'boolean') this.state.autoPower = data.autopower;
+        if (typeof data.autodisplay === 'boolean') this.state.autoDisplay = data.autodisplay;
+        if (typeof data.tvremote === 'boolean') this.state.tvRemote = data.tvremote;
         if (typeof data.drc === 'boolean') this.state.drc = data.drc;
         if (typeof data.ledset === 'boolean') this.state.ledIndicator = data.ledset;
         if (typeof data.btstandby === 'boolean') this.state.btStandby = data.btstandby;
@@ -1090,13 +1159,83 @@ export class LgSoundbarClient extends EventEmitter {
           this.state.wooferRaw = data.wooferlevel;
           this.state.wooferLevel = data.wooferlevel + this.state.wooferOffset;
         }
-        if (typeof data.rearboxlevel === 'number') this.state.rearLevel = data.rearboxlevel;
+        if (typeof data.rearboxlevel === 'number') {
+          const rearOff = typeof data.rearboxoffset === 'number' ? data.rearboxoffset : 0;
+          this.state.rearLevel = data.rearboxlevel + rearOff;
+        }
         if (typeof data.rearboxon === 'boolean') this.state.rearEnabled = data.rearboxon;
         break;
       }
 
+      // Individual APK *SetResponse / *Noti messages
+      case 'NIGHT_MODE_SET': {
+        if (typeof data.nightmode === 'boolean') this.state.nightMode = data.nightmode;
+        break;
+      }
+      case 'AUTO_VOL_SET': {
+        if (typeof data.autovol === 'boolean') this.state.autoVolume = data.autovol;
+        break;
+      }
+      case 'AUTO_POWER_SET': {
+        if (typeof data.autopower === 'boolean') this.state.autoPower = data.autopower;
+        break;
+      }
+      case 'AUTO_DISPLAY_SET': {
+        if (typeof data.autodisplay === 'boolean') this.state.autoDisplay = data.autodisplay;
+        break;
+      }
+      case 'DRC_SET': {
+        if (typeof data.drc === 'boolean') this.state.drc = data.drc;
+        break;
+      }
+      case 'TV_REMOTE_SET': {
+        if (typeof data.tvremote === 'boolean') this.state.tvRemote = data.tvremote;
+        break;
+      }
+      case 'LED_SET': {
+        if (typeof data.stat === 'boolean') this.state.ledIndicator = data.stat;
+        else if (typeof data.ledset === 'boolean') this.state.ledIndicator = data.ledset;
+        break;
+      }
+      case 'BT_STANDBY_SET':
+      case 'BT_STANDBY_STATE_NOTI': {
+        if (typeof data.on === 'boolean') this.state.btStandby = data.on;
+        else if (typeof data.btstandby === 'boolean') this.state.btStandby = data.btstandby;
+        break;
+      }
+      case 'BT_LIMIT_SET':
+      case 'BT_LIMIT_STATE_NOTI': {
+        if (typeof data.limit_bt_conn === 'boolean') this.state.btRestrict = data.limit_bt_conn;
+        break;
+      }
+      case 'AV_SYNC_SET': {
+        if (typeof data.avsync === 'number') this.state.avSyncMs = data.avsync;
+        break;
+      }
+      case 'WOOFER_LEVEL_SET': {
+        if (typeof data.wooferlevel === 'number') {
+          this.state.wooferRaw = data.wooferlevel;
+          this.state.wooferLevel = data.wooferlevel + this.state.wooferOffset;
+        }
+        break;
+      }
+      case 'REARBOX_LEVEL_SET': {
+        if (typeof data.rearboxlevel === 'number') this.state.rearLevel = data.rearboxlevel;
+        break;
+      }
+      case 'ON_SURROUND_SET': {
+        if (typeof data.rearboxon === 'boolean') this.state.rearEnabled = data.rearboxon;
+        break;
+      }
+      case 'SLEEP_INFO_REQ':
+      case 'SLEEP_SET': {
+        if (typeof data.time === 'number') this.state.sleepTimerMinutes = data.time;
+        break;
+      }
+
       case 'PLAY_INFO':
-      case 'PLAY_INFO_REQ': {
+      case 'PLAY_INFO_REQ':
+      case 'CP_INFO_REQ': {
         if (typeof data.title === 'string' && data.title) this.state.playInfo.title = data.title;
         if (typeof data.artist === 'string' && data.artist) this.state.playInfo.artist = data.artist;
         if (typeof data.albumtitle === 'string' && data.albumtitle) {
@@ -1106,7 +1245,8 @@ export class LgSoundbarClient extends EventEmitter {
         if (typeof data.duration === 'number') this.state.playInfo.durationSec = data.duration;
         if (typeof data.position === 'number') this.state.playInfo.positionSec = data.position;
         if (typeof data.playing === 'number') {
-          this.state.playInfo.playing = data.playing === 0;
+          // APK PlayInfoResponse.isPlaying(): PLAY_STATE_NORMAL (0) or PLAY_STATE_BUFFERING (4)
+          this.state.playInfo.playing = data.playing === 0 || data.playing === 4;
         }
         if (typeof data.shuffle === 'boolean') this.state.playInfo.shuffle = data.shuffle;
         if (typeof data.repeat === 'number') this.state.playInfo.repeat = data.repeat;
@@ -1122,6 +1262,8 @@ export class LgSoundbarClient extends EventEmitter {
           if (data.playctrl === 0) this.state.playInfo.playing = true;
           else if (data.playctrl === 1 || data.playctrl === 2) this.state.playInfo.playing = false;
         }
+        if (typeof data.repeat === 'number') this.state.playInfo.repeat = data.repeat;
+        if (typeof data.shuffle === 'boolean') this.state.playInfo.shuffle = data.shuffle;
         break;
       }
 
@@ -1129,8 +1271,14 @@ export class LgSoundbarClient extends EventEmitter {
         if (typeof data.position === 'number') this.state.playInfo.positionSec = data.position;
         if (typeof data.duration === 'number') this.state.playInfo.durationSec = data.duration;
         if (typeof data.playing === 'number') {
-          this.state.playInfo.playing = data.playing === 0;
+          // APK PlayTimeResponse.isPlaying(): PLAY_STATE_NORMAL (0) or PLAY_STATE_BUFFERING (4)
+          this.state.playInfo.playing = data.playing === 0 || data.playing === 4;
         }
+        break;
+      }
+
+      case 'LOCAL_TIME_SEARCH': {
+        if (typeof data.time === 'number') this.state.playInfo.positionSec = data.time;
         break;
       }
 
@@ -1147,8 +1295,15 @@ export class LgSoundbarClient extends EventEmitter {
         if (Array.isArray(data.info)) {
           this.state.alarms = data.info.map((raw: Record<string, unknown>, idx: number) => {
             const bitmask = Number(raw.day ?? 64);
-            const songpath = String(raw.songpath ?? '');
+            // APK AlarmListResponse$info uses `path`; AlarmSetRequest uses `songpath`
+            const songpath = String(raw.path ?? raw.songpath ?? '');
+            const rawType = Number(raw.type ?? 0);
             const isSpotify = songpath.startsWith('spotify:');
+            const sourceType: WifiAlarmEntry['sourceType'] = isSpotify
+              ? 'spotify'
+              : rawType === 0 && !songpath
+                ? 'default_chime'
+                : 'local_stream';
             return {
               id: Number(raw.id ?? idx),
               title: String(raw.title ?? `Alarm ${idx + 1}`),
@@ -1161,9 +1316,9 @@ export class LgSoundbarClient extends EventEmitter {
               durationMinutes: Number(raw.duration ?? 45),
               enable: Boolean(raw.enable ?? true),
               shuffle: Boolean(raw.shuffle ?? false),
-              sourceType: isSpotify ? 'spotify' : 'local_stream',
+              sourceType,
               spotifyUri: isSpotify ? songpath : undefined,
-              localTrackId: !isSpotify ? 'track-sunrise-flac' : undefined,
+              localTrackId: sourceType === 'local_stream' ? 'track-sunrise-flac' : undefined,
               fadeInSeconds: 15,
               syncedToHardware: true,
             };

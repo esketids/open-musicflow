@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process';
 
 const rootDir = path.resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
-const appVersion = String(pkg.version || '1.0.1');
+const appVersion = String(pkg.version || '1.1.0');
 const releaseDir = path.join(rootDir, 'release');
 const releasesDir = path.join(rootDir, 'releases');
 fs.mkdirSync(releaseDir, { recursive: true });

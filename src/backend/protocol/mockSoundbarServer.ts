@@ -223,7 +223,7 @@ export class MockSoundbarServer {
                 groupcolor: 0,
                 function: this.state.currentFunc,
                 spktype: 0,
-                playing: this.state.playing === 1,
+                playing: this.state.playing === 0 || this.state.playing === 4,
                 vol: this.state.volume,
                 wirelessmac: this.state.mac,
                 mute: this.state.muted,
@@ -383,7 +383,25 @@ export class MockSoundbarServer {
       }
 
       case 'VOLUME_SETTING': {
-        if (typeof data.vol === 'number') this.state.volume = data.vol;
+        if (typeof data.vol === 'number') {
+          this.state.volume = Math.max(0, Math.min(this.state.maxVolume, Math.round(data.vol)));
+        }
+        this.sendResponse(
+          socket,
+          {
+            msg: 'VOLUME_CHANGE',
+            result: 'OK',
+            data: { vol: this.state.volume },
+          },
+          cipherProfile
+        );
+        break;
+      }
+
+      case 'VOLUME_UP':
+      case 'VOLUME_DOWN': {
+        const delta = msg === 'VOLUME_UP' ? 1 : -1;
+        this.state.volume = Math.max(0, Math.min(this.state.maxVolume, this.state.volume + delta));
         this.sendResponse(
           socket,
           {
@@ -564,15 +582,32 @@ export class MockSoundbarServer {
         break;
       }
 
+      case 'SLEEP_INFO_REQ': {
+        this.sendResponse(
+          socket,
+          {
+            msg: 'SLEEP_INFO_REQ',
+            result: 'OK',
+            data: { time: this.state.sleepTime },
+          },
+          cipherProfile
+        );
+        break;
+      }
+
       case 'SETTING_INFO_REQ':
       case 'NIGHT_MODE_SET':
       case 'WOOFER_LEVEL_SET':
       case 'AUTO_VOL_SET':
+      case 'AUTO_DISPLAY_SET':
+      case 'TV_REMOTE_SET':
       case 'DRC_SET':
       case 'AV_SYNC_SET':
       case 'LED_SET':
       case 'BT_STANDBY_SET':
       case 'BT_LIMIT_SET':
+      case 'ON_SURROUND_SET':
+      case 'REARBOX_LEVEL_SET':
       case 'SLEEP_SET': {
         if (msg === 'NIGHT_MODE_SET' && typeof data.nightmode === 'boolean') {
           this.state.nightMode = data.nightmode;
@@ -587,20 +622,34 @@ export class MockSoundbarServer {
         if (msg === 'AUTO_VOL_SET' && typeof data.autovol === 'boolean') {
           this.state.autoVol = data.autovol;
         }
+        if (msg === 'AUTO_DISPLAY_SET' && typeof data.autodisplay === 'boolean') {
+          this.state.autoDisplay = data.autodisplay;
+        }
+        if (msg === 'TV_REMOTE_SET' && typeof data.tvremote === 'boolean') {
+          this.state.tvRemote = data.tvremote;
+        }
         if (msg === 'DRC_SET' && typeof data.drc === 'boolean') {
           this.state.drc = data.drc;
         }
         if (msg === 'AV_SYNC_SET' && typeof data.avsync === 'number') {
           this.state.avSync = data.avsync;
         }
-        if (msg === 'LED_SET' && typeof data.ledset === 'boolean') {
-          this.state.ledSet = data.ledset;
+        if (msg === 'LED_SET') {
+          if (typeof data.stat === 'boolean') this.state.ledSet = data.stat;
+          else if (typeof data.ledset === 'boolean') this.state.ledSet = data.ledset;
         }
-        if (msg === 'BT_STANDBY_SET' && typeof data.btstandby === 'boolean') {
-          this.state.btStandby = data.btstandby;
+        if (msg === 'BT_STANDBY_SET') {
+          if (typeof data.on === 'boolean') this.state.btStandby = data.on;
+          else if (typeof data.btstandby === 'boolean') this.state.btStandby = data.btstandby;
         }
         if (msg === 'BT_LIMIT_SET' && typeof data.limit_bt_conn === 'boolean') {
           this.state.btLimit = data.limit_bt_conn;
+        }
+        if (msg === 'ON_SURROUND_SET' && typeof data.rearboxon === 'boolean') {
+          this.state.rearOn = data.rearboxon;
+        }
+        if (msg === 'REARBOX_LEVEL_SET' && typeof data.rearboxlevel === 'number') {
+          this.state.rearLevel = data.rearboxlevel;
         }
         if (msg === 'SLEEP_SET' && typeof data.time === 'number') {
           this.state.sleepTime = Math.max(0, data.time);
@@ -616,6 +665,8 @@ export class MockSoundbarServer {
               ledset: this.state.ledSet,
               avsync: this.state.avSync,
               autopower: this.state.autoPower,
+              autodisplay: this.state.autoDisplay,
+              tvremote: this.state.tvRemote,
               autovol: this.state.autoVol,
               limit_bt_conn: this.state.btLimit,
               btstandby: this.state.btStandby,
@@ -624,6 +675,9 @@ export class MockSoundbarServer {
               visible_tonectrl: this.state.visibleToneCtrl,
               wooferlevel: this.state.wooferRaw,
               wooferoffset: this.state.wooferOffset,
+              rearboxon: this.state.rearOn,
+              rearboxlevel: this.state.rearLevel,
+              rearboxoffset: 0,
               settinginfover: 1,
               groupcompress: 0,
               ipv4addr: this.state.ipv4Addr,
@@ -643,6 +697,7 @@ export class MockSoundbarServer {
 
       case 'PLAY_INFO':
       case 'PLAY_INFO_REQ':
+      case 'CP_INFO_REQ':
       case 'LOCAL_PLAY_URL':
       case 'CP_PLAY_URL': {
         const item = (data.item as Record<string, unknown>) || data;
@@ -651,12 +706,17 @@ export class MockSoundbarServer {
         if (typeof item.albumtitle === 'string') this.state.album = item.albumtitle;
         else if (typeof item.album === 'string') this.state.album = item.album;
         if (typeof data.playing === 'number') this.state.playing = data.playing;
-        else if (msg === 'LOCAL_PLAY_URL') this.state.playing = 0;
+        else if (msg === 'LOCAL_PLAY_URL' || msg === 'CP_PLAY_URL') this.state.playing = 0;
         this.sendResponse(
           socket,
           {
             cmd: cmd ? 'notibyget' : undefined,
-            msg: msg === 'PLAY_INFO_REQ' ? 'PLAY_INFO_REQ' : 'PLAY_INFO',
+            msg:
+              msg === 'PLAY_INFO_REQ'
+                ? 'PLAY_INFO_REQ'
+                : msg === 'CP_INFO_REQ'
+                  ? 'CP_INFO_REQ'
+                  : 'PLAY_INFO',
             result: 'OK',
             data: {
               actionId: '',
@@ -689,16 +749,52 @@ export class MockSoundbarServer {
         const ctrl = typeof data.playctrl === 'number' ? data.playctrl : 0;
         if (ctrl === 0 || ctrl === 1 || ctrl === 2) {
           this.state.playing = ctrl;
+        } else if (ctrl === 3 || ctrl === 5) {
+          this.state.position = 0;
         }
         if (typeof data.repeat === 'number') this.state.repeat = data.repeat;
         if (typeof data.shuffle === 'boolean') this.state.shuffle = data.shuffle;
-        else if (typeof data.suffle === 'boolean') this.state.shuffle = data.suffle;
         this.sendResponse(
           socket,
           {
             msg: 'PLAY_CMD',
             result: 'OK',
-            data: { playctrl: ctrl },
+            data: { playctrl: ctrl, repeat: this.state.repeat, shuffle: this.state.shuffle },
+          },
+          cipherProfile
+        );
+        this.sendResponse(
+          socket,
+          {
+            msg: 'PLAY_INFO',
+            data: {
+              duration: this.state.duration,
+              albumtitle: this.state.album,
+              artist: this.state.artist,
+              title: this.state.title,
+              position: this.state.position,
+              repeat: this.state.repeat,
+              shuffle: this.state.shuffle,
+              playing: this.state.playing,
+              cptype: this.state.cpType,
+              c4aappname: this.state.sourceApp,
+            },
+          },
+          cipherProfile
+        );
+        break;
+      }
+
+      case 'LOCAL_TIME_SEARCH': {
+        if (typeof data.time === 'number') {
+          this.state.position = Math.max(0, Math.min(this.state.duration, Math.round(data.time)));
+        }
+        this.sendResponse(
+          socket,
+          {
+            msg: 'LOCAL_TIME_SEARCH',
+            result: 'OK',
+            data: { time: this.state.position },
           },
           cipherProfile
         );
@@ -761,7 +857,7 @@ export class MockSoundbarServer {
             dayrepeat: Boolean(data.dayrepeat ?? true),
             hour: Number(data.hour ?? 7),
             minute: Number(data.minute ?? 0),
-            type: 0,
+            type: Number(data.type ?? 0),
             duration: Number(data.duration ?? 30),
             volume: Number(data.volume ?? 15),
             enable: Boolean(data.enable ?? true),
