@@ -123,19 +123,67 @@ test('LgSoundbarClient communicates over TCP 9741 with LG SJ8 MockSoundbarServer
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(client.state.alarms.some((a) => a.id === created.id), false);
 
-    // Test PLAY_CMD pause (playctrl: 1) and resume (playctrl: 0)
+    // Test PLAY_CMD pause (playctrl: 1) and resume (playctrl: 0), verify no 'suffle' typo key
     assert.equal(client.state.playInfo.playing, true);
     client.sendPlayCommand(1);
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(client.state.playInfo.playing, false);
+    const playCmdTx = client.getPacketLogs().find((p) => p.direction === 'tx' && p.msgType === 'PLAY_CMD');
+    assert.ok(playCmdTx);
+    assert.equal('suffle' in ((playCmdTx.payload.data as Record<string, unknown>) || {}), false);
 
     client.sendPlayCommand(0);
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(client.state.playInfo.playing, true);
+
+    // Test Spotify play -> immediate pause (previously broken because CP_PLAY_URL sent playing: 1)
+    const spotify = new SpotifyService(client);
+    const afterPlay = await spotify.playSpotifyUriOnSoundbar('spotify:playlist:37i9dQZF1DXbITWG1ZJKYt', 'Morning Jazz');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(afterPlay.isPlaying, true);
+    assert.equal(client.state.playInfo.playing, true);
+
+    const afterPause = await spotify.togglePlayPause();
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(afterPause.isPlaying, false);
+    assert.equal(client.state.playInfo.playing, false);
+
+    const afterResume = await spotify.controlPlayback({ action: 'play' });
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(afterResume.isPlaying, true);
+
+    // Test seek (LOCAL_TIME_SEARCH) and shuffle/repeat
+    await spotify.controlPlayback({ action: 'seek', time: 42 });
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(client.state.playInfo.positionSec, 42);
+
+    // Test LED_SET (stat), BT_STANDBY_SET (on), ON_SURROUND_SET (rearboxon)
+    client.updateSettings({ ledIndicator: false, btStandby: true, rearEnabled: true });
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(client.state.ledIndicator, false);
+    assert.equal(client.state.btStandby, true);
+    assert.equal(client.state.rearEnabled, true);
   } finally {
     client.disconnect();
     await sim.stop();
   }
+});
+
+test('LgPacketFramer buffers split raw JSON packets and skips 0x11 keep-alive frames', () => {
+  const framer = new LgPacketFramer();
+  const splitA = Buffer.from('{"msg":"PLAY_INFO","data":{"playing":', 'utf8');
+  const splitB = Buffer.from('0,"title":"Bandit"}}', 'utf8');
+  assert.equal(framer.push(splitA).length, 0);
+  const res = framer.push(splitB);
+  assert.equal(res.length, 1);
+  assert.equal(res[0].parsed?.msg, 'PLAY_INFO');
+
+  // 0x11 keep-alive/binary frame followed by valid 0x10 frame
+  const keepAlive = Buffer.from([0x11, 0x00, 0x00, 0x00, 0x04, 0xde, 0xad, 0xbe, 0xef]);
+  const validPkt = encodeLgPacket({ msg: 'SPK_ALIVE' }, 'sj8_v1').buffer;
+  const frames = framer.push(Buffer.concat([keepAlive, validPkt]));
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].parsed?.msg, 'SPK_ALIVE');
 });
 
 test('SpotifyService PKCE OAuth URL generation and state validation', async () => {

@@ -146,10 +146,43 @@ export class LgPacketFramer {
 
       // Handle unframed raw JSON strings starting with '{' (0x7b)
       if (firstByte === 0x7b) {
-        const nextMagic10 = this.buffer.indexOf(LG_MAGIC_ENCRYPTED);
-        const end = nextMagic10 === -1 ? this.buffer.length : nextMagic10;
-        const textChunk = this.buffer.subarray(0, end).toString('utf8').trim();
-        this.buffer = this.buffer.subarray(end);
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        let completeEnd = -1;
+        for (let i = 0; i < this.buffer.length; i++) {
+          const ch = this.buffer[i];
+          if (inString) {
+            if (escaped) {
+              escaped = false;
+            } else if (ch === 0x5c) {
+              escaped = true;
+            } else if (ch === 0x22) {
+              inString = false;
+            }
+            continue;
+          }
+          if (ch === 0x22) {
+            inString = true;
+          } else if (ch === 0x7b) {
+            depth += 1;
+          } else if (ch === 0x7d) {
+            depth -= 1;
+            if (depth === 0) {
+              completeEnd = i + 1;
+              break;
+            }
+          }
+        }
+        if (completeEnd === -1) {
+          // Wait for remaining bytes of the split raw JSON object unless buffer is corrupted/oversized
+          if (this.buffer.length > 1024 * 512) {
+            this.buffer = Buffer.alloc(0);
+          }
+          break;
+        }
+        const textChunk = this.buffer.subarray(0, completeEnd).toString('utf8').trim();
+        this.buffer = this.buffer.subarray(completeEnd);
         if (textChunk) {
           try {
             const parsed = JSON.parse(textChunk) as Record<string, unknown>;
@@ -175,14 +208,21 @@ export class LgPacketFramer {
         continue;
       }
 
-      if (firstByte !== LG_MAGIC_ENCRYPTED && firstByte !== LG_MAGIC_PLAIN) {
-        const next10 = this.buffer.indexOf(LG_MAGIC_ENCRYPTED, 1);
-        const next00 = this.buffer.indexOf(LG_MAGIC_PLAIN, 1);
-        let nextIdx = -1;
-        if (next10 !== -1 && next00 !== -1) nextIdx = Math.min(next10, next00);
-        else if (next10 !== -1) nextIdx = next10;
-        else if (next00 !== -1) nextIdx = next00;
+      const isKnownMagic =
+        firstByte === LG_MAGIC_ENCRYPTED ||
+        firstByte === LG_MAGIC_PLAIN ||
+        firstByte === 0x11 ||
+        firstByte === 0x01;
 
+      if (!isKnownMagic) {
+        let nextIdx = -1;
+        for (let i = 1; i < this.buffer.length; i++) {
+          const b = this.buffer[i];
+          if (b === LG_MAGIC_ENCRYPTED || b === LG_MAGIC_PLAIN || b === 0x7b) {
+            nextIdx = i;
+            break;
+          }
+        }
         if (nextIdx === -1) {
           this.buffer = Buffer.alloc(0);
           break;
@@ -208,6 +248,11 @@ export class LgPacketFramer {
       const headerBuf = this.buffer.subarray(0, LG_HEADER_LENGTH);
       const bodyBuf = this.buffer.subarray(LG_HEADER_LENGTH, LG_HEADER_LENGTH + payloadLength);
       this.buffer = this.buffer.subarray(LG_HEADER_LENGTH + payloadLength);
+
+      // APK route/a.java ignores 0x01 / 0x11 keep-alive & binary frames
+      if ((firstByte & 0x0f) === 0x01 || payloadLength === 0) {
+        continue;
+      }
 
       const isEncrypted = (firstByte & 0xf0) === LG_MAGIC_ENCRYPTED;
       try {

@@ -12,6 +12,11 @@ import {
   RefreshCw,
   Play,
   Pause,
+  Square,
+  SkipBack,
+  SkipForward,
+  Shuffle,
+  Repeat,
   Plus,
   Trash2,
   CheckCircle2,
@@ -102,35 +107,53 @@ export default function App() {
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProto}//${window.location.host}/ws`;
-    const ws = new WebSocket(wsUrl);
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'init') {
-          setSoundbar(msg.data.soundbar);
-          setSpotify(msg.data.spotify);
-          setTracks(msg.data.tracks || []);
-          setPacketLogs(msg.data.packetLogs || []);
-          if (msg.data.soundbar?.host) setHostInput(msg.data.soundbar.host);
-          if (msg.data.soundbar?.port) setPortInput(msg.data.soundbar.port);
-          if (msg.data.soundbar?.encryption) setEncryptionInput(msg.data.soundbar.encryption);
-        } else if (msg.type === 'state') {
-          setSoundbar(msg.data);
-        } else if (msg.type === 'spotify') {
-          setSpotify(msg.data);
-        } else if (msg.type === 'packet') {
-          setPacketLogs((prev) => [msg.data, ...prev.slice(0, 149)]);
-        } else if (msg.type === 'alarmTriggered') {
-          showToast(`Wi-Fi Alarm Triggered: "${msg.data.title}" (Vol ${msg.data.volume})`);
+    const connectWs = () => {
+      if (disposed) return;
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'init') {
+            setSoundbar(msg.data.soundbar);
+            setSpotify(msg.data.spotify);
+            setTracks(msg.data.tracks || []);
+            setPacketLogs(msg.data.packetLogs || []);
+            if (msg.data.soundbar?.host) setHostInput(msg.data.soundbar.host);
+            if (msg.data.soundbar?.port) setPortInput(msg.data.soundbar.port);
+            if (msg.data.soundbar?.encryption) setEncryptionInput(msg.data.soundbar.encryption);
+          } else if (msg.type === 'state') {
+            setSoundbar(msg.data);
+          } else if (msg.type === 'spotify') {
+            setSpotify(msg.data);
+          } else if (msg.type === 'packet') {
+            setPacketLogs((prev) => [msg.data, ...prev.slice(0, 149)]);
+          } else if (msg.type === 'alarmTriggered') {
+            showToast(`Wi-Fi Alarm Triggered: "${msg.data.title}" (Vol ${msg.data.volume})`);
+          }
+        } catch {
+          // Ignore malformed frame
         }
-      } catch {
-        // Ignore malformed frame
-      }
+      };
+      ws.onclose = () => {
+        if (!disposed) {
+          reconnectTimer = setTimeout(connectWs, 2000);
+        }
+      };
+      ws.onerror = () => {
+        ws?.close();
+      };
     };
 
+    connectWs();
+
     return () => {
-      ws.close();
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
     };
   }, []);
 
@@ -1964,7 +1987,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-macos-universal.zip"
+                        href="/releases/open-musicflow-v1.1.0-macos-universal.zip"
                         download
                       >
                         Download macOS (.zip)
@@ -1972,7 +1995,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-macos-universal.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-macos-universal.tar.gz"
                         download
                       >
                         .tar.gz
@@ -1993,7 +2016,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-linux-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-linux-x64.tar.gz"
                         download
                       >
                         Download Linux (.tar.gz)
@@ -2001,7 +2024,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-linux-x64.zip"
+                        href="/releases/open-musicflow-v1.1.0-linux-x64.zip"
                         download
                       >
                         .zip
@@ -2021,7 +2044,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn btn-primary"
                         style={{ textDecoration: 'none', flex: 1 }}
-                        href="/releases/open-musicflow-v1.0.1-windows-x64.zip"
+                        href="/releases/open-musicflow-v1.1.0-windows-x64.zip"
                         download
                       >
                         Download Windows (.zip)
@@ -2029,7 +2052,7 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                       <a
                         className="btn"
                         style={{ textDecoration: 'none' }}
-                        href="/releases/open-musicflow-v1.0.1-windows-x64.tar.gz"
+                        href="/releases/open-musicflow-v1.1.0-windows-x64.tar.gz"
                         download
                       >
                         .tar.gz
@@ -2266,7 +2289,26 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
               </span>
               <span>EQ: {activeEqPreset.label}</span>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                id="btn-rack-prev"
+                className="btn"
+                title="Previous Track (PLAY_CMD playctrl=3)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'previous' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <SkipBack size={14} />
+              </button>
               <button
                 id="btn-rack-play-pause"
                 className="btn btn-primary"
@@ -2288,6 +2330,101 @@ mroute from wan group 239.255.255.250 to br-lan`}</pre>
                 {(soundbar.connected ? soundbar.playInfo.playing : spotify?.isPlaying)
                   ? 'Pause Stream'
                   : 'Resume Stream'}
+              </button>
+              <button
+                id="btn-rack-next"
+                className="btn"
+                title="Next Track (PLAY_CMD playctrl=5)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'next' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <SkipForward size={14} />
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                id="btn-rack-pause-explicit"
+                className="btn"
+                style={{ flex: 1, fontSize: 11.5, padding: '4px 6px' }}
+                title="Send explicit PAUSE (PLAY_CMD playctrl=1)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/pause', { method: 'POST' });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Pause size={12} />
+                Pause
+              </button>
+              <button
+                id="btn-rack-stop"
+                className="btn"
+                style={{ flex: 1, fontSize: 11.5, padding: '4px 6px' }}
+                title="Stop Playback (PLAY_CMD playctrl=2)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/stop', { method: 'POST' });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Square size={12} />
+                Stop
+              </button>
+              <button
+                id="btn-rack-shuffle"
+                className={`btn ${soundbar.playInfo.shuffle ? 'btn-spotify' : ''}`}
+                style={{ fontSize: 11.5, padding: '4px 8px' }}
+                title="Toggle Shuffle (PLAY_CMD playctrl=8)"
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'shuffle' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Shuffle size={12} />
+              </button>
+              <button
+                id="btn-rack-repeat"
+                className={`btn ${soundbar.playInfo.repeat > 0 ? 'btn-spotify' : ''}`}
+                style={{ fontSize: 11.5, padding: '4px 8px' }}
+                title={`Cycle Repeat (PLAY_CMD playctrl=7, mode=${soundbar.playInfo.repeat})`}
+                onClick={async () => {
+                  const res = await fetch('/api/spotify/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'repeat' }),
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    if (data.spotify) setSpotify(data.spotify);
+                    if (data.soundbar) setSoundbar(data.soundbar);
+                  }
+                }}
+              >
+                <Repeat size={12} />
               </button>
             </div>
           </div>

@@ -27,8 +27,8 @@ export const LG_INPUT_FUNCTIONS: InputFunctionDef[] = [
   { id: 13, code: 'MIC', label: 'Microphone', category: 'analog', description: 'Calibration / Vocal Microphone Input' },
   { id: 14, code: 'C4A', label: 'Google Cast (C4A)', category: 'streaming', description: 'Chromecast Built-In Audio Session (v1.36.145853)' },
   { id: 16, code: 'LG_OPTICAL', label: 'LG Sound Sync (Optical)', category: 'digital', description: 'LG TV Optical Sound Sync' },
-  { id: 17, code: 'FM', label: 'FM Radio Tuner', category: 'analog', description: 'Built-In FM Broadcast Receiver' },
-  { id: 18, code: 'USB', label: 'USB Storage 1', category: 'digital', description: 'Direct USB Mass Storage Playback' },
+  { id: 17, code: 'USB', label: 'USB / FM Radio', category: 'digital', description: 'Direct USB Mass Storage / Built-In FM Receiver (APK #17)' },
+  { id: 18, code: 'USB_1', label: 'USB Storage 1', category: 'digital', description: 'Direct USB Mass Storage Playback' },
   { id: 19, code: 'USB_2', label: 'USB Storage 2', category: 'digital', description: 'Secondary USB Mass Storage Port' },
 ];
 

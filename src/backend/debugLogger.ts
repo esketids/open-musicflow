@@ -25,7 +25,7 @@ function getLogFilePaths(): string[] {
 export function initDebugLogger(engineName = 'Node/Electron'): void {
   const banner = [
     '================================================================================',
-    `Open MusicFlow Studio (${engineName}) v1.0.1 — Debug Logger Initialized`,
+    `Open MusicFlow Studio (${engineName}) v1.1.0 — Debug Logger Initialized`,
     `Timestamp: ${new Date().toISOString()} | PID: ${process.pid} | Platform: ${process.platform} (${process.arch})`,
     'Log files: /tmp/open-musicflow-debug.log, ~/Library/Logs/OpenMusicFlowStudio/debug.log',
     'HTTP endpoint: http://127.0.0.1:4741/api/debug-log',
